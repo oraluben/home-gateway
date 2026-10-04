@@ -9,14 +9,17 @@ import pathlib
 import subprocess
 import tarfile
 import uuid
-from common import ROOT, deployment, remote, secret, ssh_command
+from common import ROOT, deployment, json_object, remote, secret, ssh_command, write_operator
 
 
 def materialize(config):
     runtime = copy.deepcopy(config['runtime'])
     if config.get('network', {}).get('address'):
         runtime['network']['address'] = config['network']['address']
-    profiles = json.loads(pathlib.Path(config['vpn_profiles_file']).expanduser().read_text())
+    profiles = (json_object(secret(config['vpn_profiles_pass'])) if config.get('vpn_profiles_pass')
+                else json_object(pathlib.Path(config['vpn_profiles_file']).expanduser().read_text()))
+    if 'profiles_pass' in profiles:
+        profiles = json_object(secret(profiles['profiles_pass']))
     vpn = profiles[config['vpn_profile']]
     runtime['vpn'].update(server=vpn['server'], username=vpn['username'], password_file='/config/secrets/vpn-password')
     runtime['subscription']['url'] = secret(config['secrets']['subscription_url'])
@@ -43,7 +46,7 @@ def main():
     parser = argparse.ArgumentParser()
     parser.add_argument('--config')
     parser.add_argument('--validate-only', action='store_true')
-    parser.add_argument('--restore', help='Encrypted runtime snapshot; configuration still comes from yadm/pass')
+    parser.add_argument('--restore', help='Encrypted runtime snapshot; current pass configuration remains authoritative')
     parser.add_argument('--rebuild', action='store_true', help='Rebuild even when the deployed image matches the recipe')
     args = parser.parse_args()
     config = deployment(args.config)
@@ -69,6 +72,8 @@ def main():
         command += ' --validate-only'
     try:
         result = remote(config, command, json.dumps(bundle).encode(), timeout=420)
+        if not args.validate_only:
+            write_operator(config)
         print(result.decode().strip())
     finally:
         remote(config, 'rm -f /tmp/' + name + '.tar.gz /tmp/' + name + '.py')

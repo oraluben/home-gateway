@@ -1,10 +1,7 @@
 {
   "connection": {
     "Address": "192.168.50.201",
-    "User": "gateway",
-    "SshExecutable": "ssh",
-    "KeyPath": "~/.ssh/home-gateway_ed25519",
-    "KnownHostsPath": "~/.ssh/home-gateway_known_hosts"
+    "User": "gateway"
   },
   "network": {
     "address": "192.168.50.201/24",
@@ -14,7 +11,7 @@
     ]
   },
   "timezone": "Asia/Shanghai",
-  "vpn_profiles_file": "~/.config/vpn/profiles.json",
+  "vpn_profiles_pass": "vpn/profiles",
   "vpn_profile": "vpn2",
   "secrets": {
     "subscription_url": "home-gateway/subscription-url",

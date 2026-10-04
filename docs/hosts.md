@@ -14,7 +14,7 @@
 
 ## Hyper-V
 
-私有配置使用 `host: {"backend": "hyperv", "hyperv": {...}}`。Windows 便捷入口仍需要 `operator.WslDistribution`；WSL 使用 Windows SSH 时按示例填写执行文件、私钥与 known_hosts 路径。旧文件中的顶层 `hyperv` 会在读取时转换，不改写私有文件。
+pass 部署条目使用 `host: {"backend": "hyperv", "hyperv": {...}}`，描述的是目标 VM。Windows 便捷入口默认使用系统默认 WSL；可用环境变量 `HOME_GATEWAY_WSL_DISTRIBUTION` 临时选择其他发行版，无需给管理端设置 yadm class。Linux SSH 使用本机 `~/.ssh/home-gateway_ed25519` 与 `~/.ssh/home-gateway_known_hosts`；WSL 缺少自身密钥时自动复用 Windows 的对应文件。特殊环境可显式设置 `connection.SshExecutable/KeyPath/KnownHostsPath`；旧的 `operator.WslDistribution` 与顶层 `hyperv` 继续兼容。
 
 新建的顺序：准备固定版本的 cloud image 与 seed，创建 VM，核验 SSH 主机密钥，准备 Ubuntu 目标，预检并部署。顶层 `Prepare-VM.ps1`、`Initialize-VM.ps1`、`Get-VMStatus.ps1`、`Restore-HostNetwork.ps1` 继续可用。磁盘转换和 ISO 创建留在 Hyper-V 适配中，cloud-init 内容由共享工具生成。
 
@@ -32,14 +32,14 @@
 从操作机运行：
 
 ```sh
-python3 tools/prepare-host.py --config ~/.config/home-gateway/deployment.json
+python3 tools/prepare-host.py
 python3 tools/prepare-host.py --apply
 python3 tools/deploy.py --validate-only
 python3 tools/deploy.py
 python3 tools/gateway.py status
 ```
 
-检查阶段上传短暂的检查脚本，不修改系统配置，也不解密 pass 凭据。它检查系统、架构、网卡/IP/默认路由、DNS/代理端口、已有防火墙与容器、Docker 和 TUN。输出 `blockers` 与拟执行的 `changes`。
+检查阶段读取部署参数并上传短暂的检查脚本，不修改系统配置，也不提取 VPN 密码或订阅 URL。它检查系统、架构、网卡/IP/默认路由、DNS/代理端口、已有防火墙与容器、Docker 和 TUN。输出 `blockers` 与拟执行的 `changes`。
 
 显式 `--apply` 安装缺少的依赖，向 Docker 配置补充关闭 bridge 与 Docker 自有防火墙管理的键，只写并应用本项目的 sysctl 文件。已有 Docker 配置的其他键保留；存在冲突键时拒绝处理。需要变更 Docker 配置且网关容器正在运行时，也拒绝重启 Docker。原配置保存在目标 `/var/lib/home-gateway/host-before/`，供人工恢复参考；这是主机初始化材料，不属于可跨平台恢复的网关状态备份。首次初始化不是整个系统的原子事务；中途失败先检查原因再显式重试，不自动循环。
 

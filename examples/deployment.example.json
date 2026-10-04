@@ -2,13 +2,7 @@
   "connection": {
     "Address": "192.168.50.201",
     "User": "gateway",
-    "SshExecutable": "/mnt/c/Windows/System32/OpenSSH/ssh.exe",
-    "KeyPath": "C:/Users/YOURUSER/.ssh/home-gateway_ed25519",
-    "KnownHostsPath": "C:/Users/YOURUSER/.ssh/home-gateway_known_hosts",
     "PublicKey": "ssh-ed25519 REPLACE_WITH_YOUR_PUBLIC_KEY"
-  },
-  "operator": {
-    "WslDistribution": "Ubuntu-26.04"
   },
   "network": {
     "address": "192.168.50.201/24",
@@ -18,7 +12,7 @@
     ]
   },
   "timezone": "Asia/Shanghai",
-  "vpn_profiles_file": "~/.config/vpn/profiles.json",
+  "vpn_profiles_pass": "vpn/profiles",
   "vpn_profile": "vpn2",
   "secrets": {
     "subscription_url": "home-gateway/subscription-url",

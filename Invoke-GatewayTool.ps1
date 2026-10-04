@@ -5,11 +5,14 @@ param(
     [string]$DeploymentPath = (Join-Path $env:USERPROFILE '.config\home-gateway\deployment.json')
 )
 . (Join-Path $PSScriptRoot 'Get-GatewayConfig.ps1') -DeploymentPath $DeploymentPath
-if (-not $deployment.operator.WslDistribution) { throw 'Set operator.WslDistribution for the Windows command wrappers.' }
-$linuxRepo = & wsl.exe -d $deployment.operator.WslDistribution -- wslpath -u ($repoRoot.Replace('\','/'))
+$linuxRepo = & wsl.exe @wslSelection --exec wslpath -u ($repoRoot.Replace('\','/'))
 if ($LASTEXITCODE -ne 0) { throw 'Could not resolve the operator repository path.' }
-$linuxConfig = & wsl.exe -d $deployment.operator.WslDistribution -- wslpath -a ($DeploymentPath.Replace('\','/'))
+$linuxConfig = & wsl.exe @wslSelection --exec wslpath -a ($DeploymentPath.Replace('\','/'))
 if ($LASTEXITCODE -ne 0) { throw 'Could not resolve the private configuration path.' }
-$arguments = @('-d',$deployment.operator.WslDistribution,'--','python3',($linuxRepo.Trim()+'/tools/'+$Tool),'--config',$linuxConfig.Trim()) + $ToolArguments
+$arguments = @($wslSelection) + @('--exec','python3',($linuxRepo.Trim()+'/tools/'+$Tool),'--config',$linuxConfig.Trim()) + $ToolArguments
 & wsl.exe @arguments
 if ($LASTEXITCODE -ne 0) { throw "Gateway tool failed: $Tool (exit $LASTEXITCODE)" }
+if ($Tool -eq 'deploy.py' -and $ToolArguments -notcontains '--validate-only') {
+    & wsl.exe @wslSelection --exec python3 ($linuxRepo.Trim()+'/tools/config.py') --config $linuxConfig.Trim() --write-operator $linuxConfig.Trim()
+    if ($LASTEXITCODE -ne 0) { throw 'Deployment completed, but local management metadata could not be refreshed.' }
+}

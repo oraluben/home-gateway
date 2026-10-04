@@ -1,7 +1,7 @@
 """Shared gateway maintenance actions, independent of host OS and hypervisor."""
 import argparse
 import subprocess
-from common import deployment, ssh_command
+from common import operator_deployment, ssh_command
 
 ACTIONS = {
     'status': 'sudo python3 /opt/home-gateway/show-status.py',
@@ -26,7 +26,7 @@ def main():
     parser.add_argument('action', choices=(*ACTIONS, 'dashboard'), nargs='?', default='status')
     parser.add_argument('--config')
     args = parser.parse_args()
-    config = deployment(args.config)
+    config = operator_deployment(args.config)
     command = ssh_command(config)
     if args.action == 'dashboard':
         target = config['runtime']['mihomo']['external-controller']

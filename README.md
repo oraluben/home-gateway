@@ -29,20 +29,21 @@ Wi-Fi 路由器的 WAN 网关和 DNS 指向 Ubuntu 网关。使用 Hyper-V 时�
 | 内容 | 位置 | Git 管理 |
 |---|---|---|
 | 镜像构建、网关逻辑、管理工具、示例 | 本仓库 | 公开 |
-| 主机地址、平台参数、VPN 服务端/用户名、凭据引用 | `~/.config/home-gateway`、`~/.config/vpn` | 私有 yadm |
-| 订阅 URL、面板密钥、VPN 密码 | `pass` 中的 GPG 文件 | 私有 yadm |
+| 目标地址、平台参数、VPN 服务端/用户名、凭据引用 | 默认 pass 的 `home-gateway/deployment`、`vpn/profiles` | 加密文件可由私有 yadm 跟踪 |
+| 订阅 URL、面板密钥、VPN 密码 | pass 的独立条目；可复用已有 VPN 密码 | 加密文件可由私有 yadm 跟踪 |
+| 自动生成的管理缓存 | 操作机 `~/.config/home-gateway/deployment.json` | 本地生成，不跟踪 |
 | 渲染后的配置和密码 | 网关 `/opt/home-gateway/config` | 不进入公开仓库 |
 | 订阅缓存、数据库、面板选择、日志 | 网关 `/opt/home-gateway/data` | 加密备份；日志不备份 |
 | SSH/GPG 私钥、VM 磁盘、离线镜像 | 操作机独立存储 | 不进入 Git |
 
-网关不需要安装 yadm、个人 shell 配置或 GPG 私钥。操作机仅在部署时解密必要凭据，通过 SSH 发送；之后网关可以独立重启。平台参数不会进入容器。
+网关不需要安装 yadm、pass、个人 shell 配置或 GPG 私钥。管理端只需相关的加密条目与 SSH/GPG 密钥，无需整个私有 yadm checkout，也无需 `home-gateway` class。部署时解密必要数据，通过 SSH 发送最小运行配置；之后网关可以独立重启。平台参数不会进入容器。
 
 ## 部署
 
 操作机需要 Python 3.12+、PyYAML、SSH、GPG 和 pass。Windows 使用 WSL 运行共享工具，Hyper-V 管理使用 PowerShell；Linux 操作机直接运行 Python 工具。网关目标限定 Ubuntu 24.04 amd64，使用 systemd、systemd-resolved、Docker Engine 主机网络和 TUN。WSL 与 Docker Desktop 不作为网关目标。
 
-1. 按部署方式选择 [Hyper-V 配置示例](examples/deployment.example.json) 或 [Linux 配置示例](examples/deployment.linux.example.json)，保存到操作机的 `~/.config/home-gateway/deployment.json`。共享 VPN profile 示例放入 `~/.config/vpn/profiles.json`。网卡名称填写目标的实际接口。
-2. 在 pass 中保存示例引用的凭据。将 SSH 私钥单独保存，并通过可信渠道核验网关的 SSH 主机密钥。
+1. 按网关目标选择 [Hyper-V 配置示例](examples/deployment.example.json) 或 [Linux 配置示例](examples/deployment.linux.example.json)，用 `pass insert --multiline home-gateway/deployment` 保存 JSON。将 [VPN profile 示例](examples/vpn-profiles.example.json) 保存为 `vpn/profiles`。网卡名称填写目标的实际接口。
+2. 在 pass 中保存示例引用的凭据。SSH 默认使用管理端的 `~/.ssh/home-gateway_ed25519` 与 `~/.ssh/home-gateway_known_hosts`；通过可信渠道核验网关的 SSH 主机密钥。Windows 默认使用系统默认 WSL，WSL 可复用 Windows 的 SSH 文件；通常无需填写管理端平台配置。
 3. 下载并验证版本固定的公开组件：
 
    ```sh
@@ -57,7 +58,7 @@ Wi-Fi 路由器的 WAN 网关和 DNS 指向 Ubuntu 网关。使用 Hyper-V 时�
    python3 tools/prepare-host.py --apply  # 显式安装依赖、配置转发
    ```
 
-   Windows 对应 `./Prepare-Host.ps1` 与 `./Prepare-Host.ps1 -Apply`。已准备完成时再次运行是空操作，不重启 Docker。
+   Windows 对应 `./Prepare-Host.ps1` 与 `./Prepare-Host.ps1 -Apply`。首次读取部署条目；生成管理缓存后，日常维护可不解锁 GPG。已准备完成时再次运行是空操作，不重启 Docker。
 
 5. 预检镜像与配置后部署：
 
@@ -99,7 +100,7 @@ Windows 的便捷入口使用同一套维护动作；面板入口额外处理 Wi
 ./Dashboard.ps1 copy-key
 ```
 
-局域网直接打开 `http://<网关-IP>:9090/ui/`。API 根路径返回 `Unauthorized` 是正常的；在面板中填写密钥。Linux 操作机可用 `pass -c <面板凭据项目>` 复制密钥。节点选择在面板里调整；分组和规则来自上游订阅。修改私有配置后重新部署。
+局域网直接打开 `http://<网关-IP>:9090/ui/`。API 根路径返回 `Unauthorized` 是正常的；在面板中填写密钥。Linux 操作机可用 `pass -c <面板凭据项目>` 复制密钥。节点选择在面板里调整；分组和规则来自上游订阅。用 `pass edit home-gateway/deployment` 修改配置，重新部署后生效；订阅本身仍由网关定时刷新。
 
 维护与恢复：[docs/persistence.md](docs/persistence.md)。组件与故障边界：[docs/architecture.md](docs/architecture.md)。第三方许可：[THIRD_PARTY.md](THIRD_PARTY.md)。
 

@@ -1,11 +1,11 @@
 [CmdletBinding()]
 param()
 . (Join-Path $PSScriptRoot 'Get-HyperVConfig.ps1')
-$linuxRepo = (& wsl.exe -d $deployment.operator.WslDistribution -- wslpath -u ($repoRoot.Replace('\','/'))).Trim()
-$linuxState = (& wsl.exe -d $deployment.operator.WslDistribution -- wslpath -u ($stateDirectory.Replace('\','/'))).Trim()
+$linuxRepo = (& wsl.exe @wslSelection --exec wslpath -u ($repoRoot.Replace('\','/'))).Trim()
+$linuxState = (& wsl.exe @wslSelection --exec wslpath -u ($stateDirectory.Replace('\','/'))).Trim()
 $configPath = $DeploymentPath.Replace('\','/')
-$linuxConfig = (& wsl.exe -d $deployment.operator.WslDistribution -- wslpath -u $configPath).Trim()
-& wsl.exe -d $deployment.operator.WslDistribution -- python3 ($linuxRepo+'/tools/prepare-vm.py') --config $linuxConfig --output ($linuxState+'/vm')
+$linuxConfig = (& wsl.exe @wslSelection --exec wslpath -u $configPath).Trim()
+& wsl.exe @wslSelection --exec python3 ($linuxRepo+'/tools/prepare-vm.py') --config $linuxConfig --output ($linuxState+'/vm')
 if ($LASTEXITCODE -ne 0) { throw 'VM disk preparation failed.' }
 $seedDirectory = Join-Path $stateDirectory 'vm\seed'
 $isoPath = Join-Path $stateDirectory 'vm\seed.iso'

@@ -6,7 +6,7 @@ $arguments = @()
 if ($ValidateOnly) { $arguments += '--validate-only' }
 if ($Rebuild) { $arguments += '--rebuild' }
 if ($Restore) {
-    $restorePath = & wsl.exe -d $deployment.operator.WslDistribution -- wslpath -a ($Restore.Replace('\','/'))
+    $restorePath = & wsl.exe @wslSelection --exec wslpath -a ($Restore.Replace('\','/'))
     if ($LASTEXITCODE -ne 0) { throw 'Could not resolve the restore file path.' }
     $arguments += @('--restore', $restorePath.Trim())
 }

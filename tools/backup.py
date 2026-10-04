@@ -3,11 +3,12 @@ import argparse
 import datetime
 import io
 import json
+import os
 import pathlib
 import subprocess
 import tarfile
 import uuid
-from common import ROOT, deployment, remote
+from common import ROOT, operator_deployment, remote
 
 STATE_FILES = {'snapshot.json', 'versions.json', 'config/gateway.yaml', 'config/secrets/vpn-password',
                'data/subscription/current.yaml', 'data/subscription/previous.yaml'}
@@ -51,7 +52,7 @@ def main():
         metadata, count = inspect_snapshot(decrypt(pathlib.Path(args.file)))
         print(json.dumps({'verified': True, 'files': count, 'selected_groups': len(metadata['selected'])}))
         return
-    config = deployment(args.config)
+    config = operator_deployment(args.config)
     temporary = '/tmp/home-gateway-snapshot-' + uuid.uuid4().hex + '.py'
     remote(config, 'umask 077; cat > ' + temporary, (ROOT / 'tools/guest-state.py').read_bytes())
     try:
@@ -59,7 +60,8 @@ def main():
     finally:
         remote(config, 'rm -f ' + temporary)
     inspect_snapshot(body)
-    recipients = args.recipient or (pathlib.Path.home() / '.password-store/.gpg-id').read_text().splitlines()
+    store = pathlib.Path(os.environ.get('PASSWORD_STORE_DIR', '~/.password-store')).expanduser()
+    recipients = args.recipient or (store / '.gpg-id').read_text().splitlines()
     command = ['gpg', '--batch', '--trust-model', 'always', '--encrypt']
     for recipient in recipients:
         if recipient.strip():

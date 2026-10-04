@@ -20,4 +20,4 @@ OpenConnect 只进行有限次数连接，底层重连也有时间上限；Mihom
 
 平台适配与配置边界详见 [hosts.md](hosts.md)。初始化与日常部署分开，预检不会隐式安装 Docker 或改主机网络设置。
 
-参考上游的组件化和文件挂载方式：[Mihomo](https://github.com/MetaCubeX/mihomo)、[MetaCubeXD](https://github.com/MetaCubeX/metacubexd)、[OpenConnect](https://www.infradead.org/openconnect/)、[yadm alternates](https://yadm.io/docs/alternates)。本项目只添加家庭网关的路由、配置组合、有限重试和操作工具。
+参考上游的组件化和文件挂载方式：[Mihomo](https://github.com/MetaCubeX/mihomo)、[MetaCubeXD](https://github.com/MetaCubeX/metacubexd)、[OpenConnect](https://www.infradead.org/openconnect/)、[pass](https://www.passwordstore.org/)。本项目只添加家庭网关的路由、配置组合、有限重试和操作工具。
