@@ -90,8 +90,13 @@ Read-NetworkSection 'GuestVirtualAdapters' {
     Get-VMNetworkAdapter -VMName $VMName | Select-Object Name,SwitchName,MacAddress,DhcpGuard,RouterGuard,MacAddressSpoofing,Status,IPAddresses
 }
 Read-NetworkSection 'VLANs' {
-    Get-VMNetworkAdapterVlan -ManagementOS
-    Get-VMNetworkAdapterVlan -VMName $VMName
+    # Hyper-V settings contain cyclic ParentAdapter references; keep only useful fields.
+    Get-VMNetworkAdapterVlan -ManagementOS | Select-Object @{N='Scope';E={'Host'}},
+        @{N='Adapter';E={$_.ParentAdapter.Name}}, @{N='Switch';E={$_.ParentAdapter.SwitchName}},
+        OperationMode,AccessVlanId,NativeVlanId,AllowedVlanIdListString
+    Get-VMNetworkAdapterVlan -VMName $VMName | Select-Object @{N='Scope';E={'Guest'}},
+        @{N='Adapter';E={$_.ParentAdapter.Name}}, @{N='Switch';E={$_.ParentAdapter.SwitchName}},
+        OperationMode,AccessVlanId,NativeVlanId,AllowedVlanIdListString
 }
 Read-NetworkSection 'DHCPLogSettings' {
     Get-WinEvent -ListLog 'Microsoft-Windows-Dhcp-Client/Admin',$logName |
