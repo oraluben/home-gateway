@@ -11,11 +11,13 @@ import sys
 import tarfile
 import uuid
 from common import ROOT, deployment, json_object, remote, secret, ssh_command, write_operator
+from ssh_access import deployment_access
 sys.path.insert(0, str(ROOT / 'image'))
 from vpn_auth import validate_totp
 
 
 def materialize(config):
+    access = deployment_access(config.get('connection', {}))
     runtime = copy.deepcopy(config['runtime'])
     if config.get('network', {}).get('address'):
         runtime['network']['address'] = config['network']['address']
@@ -28,6 +30,8 @@ def materialize(config):
     for key in ('password_file', 'token_mode', 'token_file'):
         runtime['vpn'].pop(key, None)
     bundle = {'runtime': runtime}
+    if access is not None:
+        bundle['ssh_access'] = access
     if vpn.get('credential'):
         runtime['vpn']['password_file'] = '/config/secrets/vpn-password'
         bundle['vpn_password'] = secret(vpn['credential'])
@@ -50,7 +54,7 @@ def source_archive():
     files += list((ROOT / 'image').glob('*.py'))
     files += [ROOT / 'image/Dockerfile', ROOT / 'image/.dockerignore', ROOT / 'image/mihomo']
     files += list((ROOT / 'image/licenses').glob('*'))
-    files += [ROOT / 'artifacts/dashboard.tgz', ROOT / 'tools/guest-install.py']
+    files += [ROOT / 'artifacts/dashboard.tgz', ROOT / 'tools/guest-install.py', ROOT / 'tools/ssh_access.py']
     stream = io.BytesIO()
     with tarfile.open(fileobj=stream, mode='w:gz') as archive:
         for path in files:

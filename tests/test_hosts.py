@@ -1,4 +1,5 @@
 import importlib.util
+import base64
 import io
 import json
 import pathlib
@@ -144,7 +145,8 @@ class HostTests(unittest.TestCase):
 
     def test_cloud_init_is_independent_of_hypervisor_and_secrets(self):
         with tempfile.TemporaryDirectory() as directory:
-            config = {'connection': {'User': 'gateway', 'PublicKey': 'ssh-ed25519 PUBLIC'},
+            public_key = 'ssh-ed25519 ' + base64.b64encode(b'\x00\x00\x00\x0bssh-ed25519\x00\x00\x00\x20' + bytes(32)).decode()
+            config = {'connection': {'User': 'gateway', 'PublicKey': public_key},
                       'runtime': {'network': {'interface': 'enp1s0'}}, 'network': INPUT['network'],
                       'secrets': {'subscription_url': 'PRIVATE-SENTINEL'}}
             write_seed(config, '00155D500001', directory)

@@ -24,6 +24,7 @@ Wi-Fi 路由器的 WAN 网关和 DNS 指向 Ubuntu 网关。使用 Hyper-V 时�
 - VPN 有限重试；Mihomo 最多重试三次。可分别查看日志、停止或手动重试。
 - 配置只读挂载，镜像不含个人配置；部署先验证，再切换，已有部署失败时回退。
 - GPG 加密状态备份，恢复订阅缓存、地区数据库和节点选择。
+- 部署时同步管理端公钥文件；Hyper-V 首次创建也使用同一授权列表。
 
 ## 内容放在哪里
 
@@ -33,6 +34,7 @@ Wi-Fi 路由器的 WAN 网关和 DNS 指向 Ubuntu 网关。使用 Hyper-V 时�
 | 目标地址、平台参数、VPN 服务端/用户名、凭据引用 | 默认 pass 的 `home-gateway/deployment`、`vpn/profiles` | 加密文件可由私有 yadm 跟踪 |
 | 订阅 URL、面板密钥、VPN 密码、TOTP 种子 | pass 的独立条目；可复用已有 VPN 凭据 | 加密文件可由私有 yadm 跟踪 |
 | 自动生成的管理缓存 | 操作机 `~/.config/home-gateway/deployment.json` | 本地生成，不跟踪 |
+| SSH 登录公钥列表 | 操作机 `connection.AuthorizedKeysFile` 指定的文件 | 可由私有 yadm 跟踪 |
 | 渲染后的配置和密码 | 网关 `/opt/home-gateway/config` | 不进入公开仓库 |
 | 订阅缓存、数据库、面板选择、日志 | 网关 `/opt/home-gateway/data` | 加密备份；日志不备份 |
 | SSH/GPG 私钥、VM 磁盘、离线镜像 | 操作机独立存储 | 不进入 Git |

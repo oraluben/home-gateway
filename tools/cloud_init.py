@@ -3,6 +3,7 @@ import ipaddress
 import pathlib
 import re
 import yaml
+from ssh_access import seed_keys
 
 
 def write_seed(config, mac_address, destination):
@@ -20,7 +21,7 @@ def write_seed(config, mac_address, destination):
         'hostname': 'home-gateway', 'manage_etc_hosts': True, 'timezone': config.get('timezone', 'UTC'),
         'users': [{'name': connection['User'], 'groups': ['adm', 'sudo'], 'shell': '/bin/bash',
                    'sudo': 'ALL=(ALL) NOPASSWD:ALL', 'lock_passwd': True,
-                   'ssh_authorized_keys': [connection['PublicKey']]}],
+                   'ssh_authorized_keys': seed_keys(connection)}],
         'ssh_pwauth': False, 'disable_root': True, 'package_update': False, 'package_upgrade': False,
         'runcmd': [['systemctl', 'enable', '--now', 'ssh']]}
     network_data = {'version': 2, 'ethernets': {'gateway-lan': {

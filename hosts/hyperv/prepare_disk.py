@@ -24,6 +24,7 @@ def main():
     disk = output / 'gateway.vhdx'
     if disk.exists():
         raise ValueError('Refusing to overwrite an existing VM disk')
+    write_seed(config, config['host']['hyperv']['MacAddress'], output / 'seed')
     image = ROOT / 'artifacts/ubuntu.img'
     if not image.exists():
         image.parent.mkdir(exist_ok=True)
@@ -31,7 +32,6 @@ def main():
     if hashlib.sha256(image.read_bytes()).hexdigest() != versions['ubuntu']['sha256']:
         raise ValueError('Ubuntu cloud image checksum mismatch')
     subprocess.run(['qemu-img', 'convert', '-O', 'vhdx', '-o', 'subformat=dynamic', str(image), str(disk)], check=True)
-    write_seed(config, config['host']['hyperv']['MacAddress'], output / 'seed')
     print('Pinned Ubuntu disk and private cloud-init seed prepared')
 
 

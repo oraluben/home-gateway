@@ -58,7 +58,7 @@ def deployment(path=None):
 def operator_values(config):
     """Allowlist non-secret local transport/VM metadata, never full runtime settings."""
     result = {}
-    for key, fields in {'connection': ('Address', 'User', 'PublicKey', 'SshExecutable', 'KeyPath', 'KnownHostsPath'),
+    for key, fields in {'connection': ('Address', 'User', 'PublicKey', 'AuthorizedKeysFile', 'SshExecutable', 'KeyPath', 'KnownHostsPath'),
                         'operator': ('WslDistribution',), 'network': ('address', 'gateway', 'dns')}.items():
         if key in config:
             result[key] = {name: config[key][name] for name in fields if name in config[key]}

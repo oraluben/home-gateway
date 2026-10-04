@@ -90,6 +90,9 @@ def main():
     with tempfile.TemporaryDirectory(prefix='.stage-', dir=PROJECT) as temporary:
         stage = pathlib.Path(temporary)
         safe_extract(args.source, stage)
+        sys.path.insert(0, str(stage / 'tools'))
+        from ssh_access import target_access, snapshot_access, write_access, restore_access
+        ssh_target = target_access(bundle['ssh_access']) if bundle.get('ssh_access') else None
         versions = json.loads((stage / 'versions.json').read_text())
         previous = json.loads((PROJECT / 'data/deployment.json').read_text()) if (PROJECT / 'data/deployment.json').exists() else {}
         if bundle['image'] != versions['image'] or bundle['version'] != versions['version']:
@@ -153,6 +156,11 @@ def main():
                  '-t', candidate_image, str(stage / 'image')], timeout=300)
         candidate_id = run(['docker', 'image', 'inspect', candidate_image, '--format', '{{.Id}}']).decode().strip()
         PHASE = 'validate'
+        if ssh_target:
+            write(stage / 'authorized_keys', ssh_target['body'])
+            checked = run(['ssh-keygen', '-lf', str(stage / 'authorized_keys')])
+            if len(checked.splitlines()) != ssh_target['count']:
+                raise ValueError('SSH public-key validation failed')
         run(['docker', 'run', '--rm', '--network=none', '--entrypoint', 'mihomo',
              '-v', str(candidate_data) + ':/data:ro', '-v', str(stage / 'validation.yaml') + ':/validate.yaml:ro',
              candidate_image, '-t', '-d', '/data/mihomo', '-f', '/validate.yaml'])
@@ -168,6 +176,10 @@ def main():
             return
         backup = data / 'backups' / ('deploy-' + datetime.datetime.now().strftime('%Y%m%d-%H%M%S'))
         backup.mkdir(parents=True, mode=0o700)
+        ssh_before = snapshot_access(ssh_target) if ssh_target else None
+        ssh_applied = False
+        if ssh_before and ssh_before['body'] is not None:
+            write(backup / 'ssh/authorized_keys', ssh_before['body'])
         files = [p for p in stage.iterdir() if p.is_file() and p.suffix in ('.py', '.sh')]
         files += [stage / 'compose.yaml', stage / 'versions.json']
         for directory in ('image', 'config'):
@@ -238,8 +250,13 @@ def main():
                 sys.path.insert(0, str(PROJECT))
                 updater = importlib.import_module('update-subscription')
                 updater.restore_selections(config, selected)
+            if ssh_target:
+                ssh_applied = True
+                write_access(ssh_target, ssh_target['body'])
         except Exception:
             PHASE = 'rollback'
+            if ssh_applied:
+                restore_access(ssh_target, ssh_before)
             subprocess.run(['systemctl', 'stop', 'home-gateway'], capture_output=True, timeout=45)
             if not (backup / 'install-guest.sh').exists():
                 raise RuntimeError('Initial deployment failed; inspect the private deployment log before retrying') from None
@@ -283,6 +300,8 @@ def main():
         receipt = {'state': 'success', 'version': versions['version'], 'image': bundle['image'],
                    'image_id': candidate_id, 'runtime_image': runtime_image,
                    'backup': str(backup), 'updated_at': datetime.datetime.now().astimezone().isoformat()}
+        if ssh_target:
+            receipt['ssh_authorized_keys'] = ssh_target['count']
         write(data / 'deployment.json', (json.dumps(receipt, indent=2) + '\n').encode())
         (data / 'deployment-error.log').unlink(missing_ok=True)
         print(json.dumps(receipt))

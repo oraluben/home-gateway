@@ -1,7 +1,9 @@
 {
   "connection": {
     "Address": "192.168.50.201",
-    "User": "gateway"
+    "User": "gateway",
+    "PublicKey": "ssh-ed25519 REPLACE_WITH_YOUR_MANAGEMENT_PUBLIC_KEY",
+    "AuthorizedKeysFile": "~/.ssh/authorized_keys"
   },
   "network": {
     "address": "192.168.50.201/24",

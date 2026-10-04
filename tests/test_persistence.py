@@ -62,13 +62,13 @@ class PersistenceTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             root = pathlib.Path(directory)
             required = ('compose.yaml', 'versions.json', 'image/Dockerfile', 'image/.dockerignore',
-                        'image/mihomo', 'artifacts/dashboard.tgz', 'tools/guest-install.py', 'image/runtime.py')
+                        'image/mihomo', 'artifacts/dashboard.tgz', 'tools/guest-install.py', 'tools/ssh_access.py', 'image/runtime.py')
             for name in required:
                 path = root / name
                 path.parent.mkdir(parents=True, exist_ok=True)
                 path.write_bytes(b'public input')
             for name in ('config/gateway.yaml', 'config/secrets/vpn-token', '.env', 'data/subscription/current.yaml', 'access/id_ed25519',
-                         'deployment.json'):
+                         'deployment.json', 'tools/authorized_keys'):
                 path = root / name
                 path.parent.mkdir(parents=True, exist_ok=True)
                 path.write_bytes(b'PRIVATE SENTINEL')
