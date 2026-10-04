@@ -17,6 +17,7 @@ Wi-Fi 路由器的 WAN 网关和 DNS 指向 Ubuntu 网关。使用 Hyper-V 时�
 ## 已实现
 
 - OpenConnect 自动采用服务器下发的 IPv4 网段和 DNS，拒绝意外的全隧道路由。
+- VPN profile 支持密码与 TOTP；种子在 pass 中保存，部署时渲染成只读令牌文件。
 - Mihomo 透明代理；公司网段优先走 VPN，普通流量采用完整 Clash 订阅中的节点、分组和规则。
 - 每日更新订阅，保留本地网关配置、API 密钥和节点选择。更新失败继续使用上次有效配置；节点删除时按配置的地区筛选回退。
 - MetaCubeXD 网页面板，在受限的局域网地址监听并要求 API 密钥。
@@ -30,7 +31,7 @@ Wi-Fi 路由器的 WAN 网关和 DNS 指向 Ubuntu 网关。使用 Hyper-V 时�
 |---|---|---|
 | 镜像构建、网关逻辑、管理工具、示例 | 本仓库 | 公开 |
 | 目标地址、平台参数、VPN 服务端/用户名、凭据引用 | 默认 pass 的 `home-gateway/deployment`、`vpn/profiles` | 加密文件可由私有 yadm 跟踪 |
-| 订阅 URL、面板密钥、VPN 密码 | pass 的独立条目；可复用已有 VPN 密码 | 加密文件可由私有 yadm 跟踪 |
+| 订阅 URL、面板密钥、VPN 密码、TOTP 种子 | pass 的独立条目；可复用已有 VPN 凭据 | 加密文件可由私有 yadm 跟踪 |
 | 自动生成的管理缓存 | 操作机 `~/.config/home-gateway/deployment.json` | 本地生成，不跟踪 |
 | 渲染后的配置和密码 | 网关 `/opt/home-gateway/config` | 不进入公开仓库 |
 | 订阅缓存、数据库、面板选择、日志 | 网关 `/opt/home-gateway/data` | 加密备份；日志不备份 |

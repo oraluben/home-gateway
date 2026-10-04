@@ -46,6 +46,18 @@ class PersistenceTests(unittest.TestCase):
         self.assertEqual(metadata['selected'], {'AI': 'US-1'})
         self.assertEqual(count, 4)
 
+    def test_snapshot_accepts_totp_file_and_rendered_secrets_have_restricted_permissions(self):
+        _, count = backup.inspect_snapshot(snapshot({'config/secrets/vpn-token': b'test-token'}))
+        self.assertEqual(count, 5)
+        with tempfile.TemporaryDirectory() as directory:
+            root = pathlib.Path(directory)
+            installer.write_vpn_secrets(root, {'vpn_token': 'test-token'})
+            token = root / 'config/secrets/vpn-token'
+            self.assertEqual(token.read_text(), 'test-token\n')
+            self.assertEqual(token.stat().st_mode & 0o777, 0o600)
+            self.assertEqual(token.parent.stat().st_mode & 0o777, 0o700)
+            self.assertFalse((token.parent / 'vpn-password').exists())
+
     def test_source_archive_excludes_operator_files(self):
         with tempfile.TemporaryDirectory() as directory:
             root = pathlib.Path(directory)
@@ -55,7 +67,7 @@ class PersistenceTests(unittest.TestCase):
                 path = root / name
                 path.parent.mkdir(parents=True, exist_ok=True)
                 path.write_bytes(b'public input')
-            for name in ('config/gateway.yaml', '.env', 'data/subscription/current.yaml', 'access/id_ed25519',
+            for name in ('config/gateway.yaml', 'config/secrets/vpn-token', '.env', 'data/subscription/current.yaml', 'access/id_ed25519',
                          'deployment.json'):
                 path = root / name
                 path.parent.mkdir(parents=True, exist_ok=True)

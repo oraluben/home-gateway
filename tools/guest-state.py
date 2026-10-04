@@ -12,7 +12,7 @@ sys.path.insert(0, str(PROJECT))
 updater = importlib.import_module('update-subscription')
 config = updater.load_config()
 choices = updater.selections(config)
-names = ['config/gateway.yaml', 'config/secrets/vpn-password', 'versions.json',
+names = ['config/gateway.yaml', 'config/secrets/vpn-password', 'config/secrets/vpn-token', 'versions.json',
          'data/subscription/current.yaml', 'data/subscription/previous.yaml']
 names += ['data/mihomo/' + name for name in ('geoip.dat', 'geosite.dat', 'Country.mmdb', 'ASN.mmdb')]
 stream = io.BytesIO()

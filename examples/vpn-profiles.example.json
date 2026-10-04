@@ -1,4 +1,14 @@
 {
+  "vpn1": {
+    "server": "vpn1.example.invalid:443",
+    "username": "YOUR_USERNAME",
+    "credential": "openconnect",
+    "token": {
+      "mode": "totp",
+      "encoding": "base32",
+      "credential": "vpn/vpn1-totp"
+    }
+  },
   "vpn2": {
     "server": "vpn.example.invalid:443",
     "username": "YOUR_USERNAME",

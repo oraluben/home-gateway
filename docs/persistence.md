@@ -16,6 +16,14 @@ pass 支持多行 JSON。初始化用 `pass insert --multiline home-gateway/depl
 
 密码库更新不会主动改动运行中的 VM；重新部署后生效。订阅则由 VM 每日直接刷新，不需要操作机在线。
 
+### TOTP
+
+在共享 profile 中增加 `token: {"mode": "totp", "encoding": "base32", "credential": "vpn/vpn1-totp"}`。pass 条目保存长期令牌种子；`encoding: base32` 允许原始 Base32 内容，部署会添加 OpenConnect 要求的 `base32:` 前缀。已经带此前缀的内容也兼容；不指定 encoding 时还支持 OpenConnect 的十六进制种子格式。不要保存短期六位验证码。[OpenConnect 令牌文档](https://www.infradead.org/openconnect/token.html)。
+
+需要密码加 TOTP 的 profile 保留 `credential`；仅需令牌时可以省略密码引用。只有选中的 profile 会被解密、渲染。网关使用 `/config/secrets/vpn-token` 与 `--token-secret=@/config/secrets/vpn-token`；密码继续经标准输入传递。种子不出现在进程参数、运行状态或镜像中。部署预检检查文件及格式，不向 VPN 服务端登录。失败仍遵循有限重试设置。
+
+TOTP 文件只读，无需维护计数器；网关必须保持准确的系统时间。切换 profile 时修改部署条目的 `vpn_profile` 后重新部署。当前不支持 HOTP/RSA/PIN 认证流程；HOTP 需要额外的计数器持久化，不能套用只读文件方案。同一令牌在多个设备上的登录限制由服务端决定。
+
 ## 状态备份
 
 在 WSL/Linux 操作机运行：
@@ -25,7 +33,7 @@ python3 tools/backup.py create
 python3 tools/backup.py verify --file ~/.local/state/home-gateway/backups/gateway-YYYYMMDD-HHMMSS.tar.gz.gpg
 ```
 
-备份默认加密给 password store 的收件人，也可重复传 `--recipient <fingerprint>` 指定。明文只经过进程内存和 SSH，不落在操作机磁盘。归档保存配置现场副本、VPN 密码、有效订阅、地区数据库和当前节点选择；不保存日志、临时策略或正在写入的数据库。
+备份默认加密给 password store 的收件人，也可重复传 `--recipient <fingerprint>` 指定。明文只经过进程内存和 SSH，不落在操作机磁盘。归档保存配置现场副本、VPN 密码、已部署的 TOTP 文件、有效订阅、地区数据库和当前节点选择；不保存日志、临时策略或正在写入的数据库。未启用 profile 的令牌仍只在 pass 中。
 
 备份文件较大，不必提交 Git；复制到独立磁盘或已有备份服务。SSH 私钥和 GPG 私钥需要独立备份，公开源码与 yadm 无法替代它们。
 
@@ -43,8 +51,8 @@ Windows 使用 `./Deploy-Gateway.ps1 -Restore <文件> -ValidateOnly` 预检，�
 全新 Hyper-V VM 先通过 `Prepare-VM.ps1` 与 `Initialize-VM.ps1` 准备；Linux 主机先安装系统并配置静态网络。核验目标的 SSH 主机密钥后更新 known_hosts，两种目标都先执行 `tools/prepare-host.py --apply` 再预检和恢复。基础镜像下载、Docker 软件源和首次构建仍需要网络；可以在维护前保存本机镜像：
 
 ```sh
-ssh <网关> 'sudo docker save home-gateway:0.4.0 | gzip' > home-gateway-0.4.0.tar.gz
-ssh <网关> 'sudo docker load' < home-gateway-0.4.0.tar.gz
+ssh <网关> 'sudo docker save home-gateway:0.5.0 | gzip' > home-gateway-0.5.0.tar.gz
+ssh <网关> 'sudo docker load' < home-gateway-0.5.0.tar.gz
 ```
 
 VM VHDX 和镜像归档是独立的恢复材料，不能提交公开 Git。对于当前已经运行的 VM，无需为了目录整齐移动在线磁盘；记录磁盘实际位置，后续重建使用操作机 `~/.local/state/home-gateway/vm`。

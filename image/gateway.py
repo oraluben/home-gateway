@@ -7,7 +7,8 @@ import time
 import yaml
 from network import DATA, apply_base, proxy_off, proxy_on, read_policy, run, save_json
 from configuration import render_mihomo
-from runtime import load_config, password_path
+from runtime import CONFIG, load_config
+from vpn_auth import openconnect_command
 
 DATA.mkdir(exist_ok=True)
 LOGS = DATA / 'logs'
@@ -111,14 +112,8 @@ if config['clash'].get('enabled', True):
     components.append(Component('clash', ['mihomo', '-d', str(runtime), '-f', str(runtime_config)], config['clash'].get('attempts', 3)))
 if config['vpn'].get('enabled', True):
     vpn = config['vpn']
-    password_file = password_path(config)
-    if not password_file.is_file():
-        raise RuntimeError('VPN password file is missing')
-    components.append(Component('vpn', ['openconnect', '--non-inter', '--passwd-on-stdin',
-                                        '--reconnect-timeout=' + str(vpn.get('reconnect_timeout', 30)),
-                                        '--interface=' + vpn['interface'], '--user=' + vpn['username'],
-                                        '--script=/app/vpn-hook.py', vpn['server']],
-                                vpn.get('attempts', 1), password_file))
+    vpn_command, password_file = openconnect_command(vpn, CONFIG.parent)
+    components.append(Component('vpn', vpn_command, vpn.get('attempts', 1), password_file))
 
 last_network_state = None
 last_rotate = 0

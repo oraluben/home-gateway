@@ -10,7 +10,7 @@ import tarfile
 import uuid
 from common import ROOT, operator_deployment, remote
 
-STATE_FILES = {'snapshot.json', 'versions.json', 'config/gateway.yaml', 'config/secrets/vpn-password',
+STATE_FILES = {'snapshot.json', 'versions.json', 'config/gateway.yaml', 'config/secrets/vpn-password', 'config/secrets/vpn-token',
                'data/subscription/current.yaml', 'data/subscription/previous.yaml'}
 STATE_FILES.update('data/mihomo/' + name for name in ('geoip.dat', 'geosite.dat', 'Country.mmdb', 'ASN.mmdb'))
 

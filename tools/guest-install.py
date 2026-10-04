@@ -39,6 +39,12 @@ def write(path, body, mode=0o600):
     path.chmod(mode)
 
 
+def write_vpn_secrets(stage, bundle):
+    for key, name in (('vpn_password', 'vpn-password'), ('vpn_token', 'vpn-token')):
+        if key in bundle:
+            write(stage / 'config/secrets' / name, (bundle[key] + '\n').encode())
+
+
 def image_recipe(project):
     digest = hashlib.sha256()
     digest.update(json.loads((project / 'versions.json').read_text())['base_image'].encode())
@@ -94,7 +100,7 @@ def main():
             raise ValueError('Dashboard checksum mismatch')
         config = bundle['runtime']
         write(stage / 'config/gateway.yaml', yaml.safe_dump(config, allow_unicode=True, sort_keys=False).encode())
-        write(stage / 'config/secrets/vpn-password', (bundle['vpn_password'] + '\n').encode())
+        write_vpn_secrets(stage, bundle)
         data = PROJECT / 'data'
         data.mkdir(mode=0o700, exist_ok=True)
         restored = []
@@ -150,6 +156,11 @@ def main():
         run(['docker', 'run', '--rm', '--network=none', '--entrypoint', 'mihomo',
              '-v', str(candidate_data) + ':/data:ro', '-v', str(stage / 'validation.yaml') + ':/validate.yaml:ro',
              candidate_image, '-t', '-d', '/data/mihomo', '-f', '/validate.yaml'])
+        run(['docker', 'run', '--rm', '--network=none', '--entrypoint', 'python3',
+             '-v', str(stage / 'config') + ':/config:ro', candidate_image, '-c',
+             'from runtime import CONFIG,load_config;from vpn_auth import openconnect_command;'
+             'v=load_config().get("vpn",{});'
+             'openconnect_command(v,CONFIG.parent) if v.get("enabled",True) else None'])
         write(build_record, json.dumps({'recipe': recipe, 'image_id': candidate_id}).encode())
         install_ui(stage / 'artifacts/dashboard.tgz', stage / 'ui')
         if args.validate_only:

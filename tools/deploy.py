@@ -7,9 +7,12 @@ import importlib
 import json
 import pathlib
 import subprocess
+import sys
 import tarfile
 import uuid
 from common import ROOT, deployment, json_object, remote, secret, ssh_command, write_operator
+sys.path.insert(0, str(ROOT / 'image'))
+from vpn_auth import validate_totp
 
 
 def materialize(config):
@@ -21,10 +24,23 @@ def materialize(config):
     if 'profiles_pass' in profiles:
         profiles = json_object(secret(profiles['profiles_pass']))
     vpn = profiles[config['vpn_profile']]
-    runtime['vpn'].update(server=vpn['server'], username=vpn['username'], password_file='/config/secrets/vpn-password')
+    runtime['vpn'].update(server=vpn['server'], username=vpn['username'])
+    for key in ('password_file', 'token_mode', 'token_file'):
+        runtime['vpn'].pop(key, None)
+    bundle = {'runtime': runtime}
+    if vpn.get('credential'):
+        runtime['vpn']['password_file'] = '/config/secrets/vpn-password'
+        bundle['vpn_password'] = secret(vpn['credential'])
+    if vpn.get('token'):
+        if vpn['token'].get('mode') != 'totp':
+            raise ValueError('Only TOTP token profiles are supported')
+        runtime['vpn'].update(token_mode='totp', token_file='/config/secrets/vpn-token')
+        bundle['vpn_token'] = validate_totp(secret(vpn['token']['credential']), vpn['token'].get('encoding'))
+    if not vpn.get('credential') and not vpn.get('token'):
+        raise ValueError('VPN profile requires a password or a TOTP token')
     runtime['subscription']['url'] = secret(config['secrets']['subscription_url'])
     runtime['mihomo']['secret'] = secret(config['secrets']['controller'])
-    return {'runtime': runtime, 'vpn_password': secret(vpn['credential'])}
+    return bundle
 
 
 def source_archive():
