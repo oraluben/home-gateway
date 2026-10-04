@@ -1,0 +1,78 @@
+{
+  "connection": {
+    "Address": "192.168.50.201",
+    "User": "gateway",
+    "SshExecutable": "/mnt/c/Windows/System32/OpenSSH/ssh.exe",
+    "KeyPath": "C:/Users/YOURUSER/.ssh/home-gateway_ed25519",
+    "KnownHostsPath": "C:/Users/YOURUSER/.ssh/home-gateway_known_hosts",
+    "PublicKey": "ssh-ed25519 REPLACE_WITH_YOUR_PUBLIC_KEY"
+  },
+  "operator": {
+    "WslDistribution": "Ubuntu-26.04"
+  },
+  "hyperv": {
+    "VMName": "HomeGateway",
+    "SwitchName": "HomeGateway-LAN",
+    "PhysicalAdapterGuid": "00000000-0000-0000-0000-000000000000",
+    "MacAddress": "00155D7A4001",
+    "MemoryMB": 2048,
+    "ProcessorCount": 2,
+    "DiskSizeGB": 16,
+    "BaseImage": "https://cloud-images.ubuntu.com/releases/noble/release-20260926/ubuntu-24.04-server-cloudimg-amd64.img"
+  },
+  "network": {
+    "address": "192.168.50.201/24",
+    "gateway": "192.168.50.1",
+    "dns": [
+      "192.168.50.1"
+    ]
+  },
+  "timezone": "Asia/Shanghai",
+  "vpn_profiles_file": "~/.config/vpn/profiles.json",
+  "vpn_profile": "vpn2",
+  "secrets": {
+    "subscription_url": "home-gateway/subscription-url",
+    "controller": "home-gateway/controller"
+  },
+  "runtime": {
+    "network": {
+      "interface": "eth0",
+      "clients": [
+        "192.168.50.0/24",
+        "192.168.60.0/24"
+      ]
+    },
+    "clash": {
+      "enabled": true,
+      "attempts": 3
+    },
+    "vpn": {
+      "enabled": true,
+      "interface": "vpn0",
+      "attempts": 1,
+      "reconnect_timeout": 30
+    },
+    "mihomo": {
+      "mode": "rule",
+      "external-controller": "192.168.50.201:9090",
+      "external-ui": "ui",
+      "unified-delay": true,
+      "profile": {
+        "store-selected": true
+      }
+    },
+    "subscription": {
+      "user_agent": "clash-verge",
+      "interval_seconds": 86400,
+      "enabled": true,
+      "required_groups": [
+        "AI",
+        "Main"
+      ],
+      "fallback_filters": {
+        "AI": "US|美国",
+        "Main": "HK|香港"
+      }
+    }
+  }
+}

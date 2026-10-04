@@ -1,0 +1,25 @@
+# Private configuration, credentials and generated state never belong in this repository.
+/config/
+/data/
+/state/
+/access/
+/vm/
+/images/
+/backups/
+/connection.json
+/vm-settings.json
+/deployment.json
+/image/mihomo
+/image/licenses/
+/artifacts/
+__pycache__/
+*.py[cod]
+.venv/
+.env
+*.key
+*.pem
+*.vhdx
+*.iso
+*.tar.gz
+*.gpg
+.DS_Store

@@ -1,0 +1,6 @@
+**
+!Dockerfile
+!mihomo
+!*.py
+!licenses/
+!licenses/**

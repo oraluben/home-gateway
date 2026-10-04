@@ -1,0 +1,7 @@
+{
+  "vpn2": {
+    "server": "vpn.example.invalid:443",
+    "username": "YOUR_USERNAME",
+    "credential": "openconnect"
+  }
+}

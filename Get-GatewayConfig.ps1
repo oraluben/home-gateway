@@ -1,0 +1,10 @@
+param([string]$DeploymentPath = (Join-Path $env:USERPROFILE '.config\home-gateway\deployment.json'))
+$ErrorActionPreference = 'Stop'
+$deployment = Get-Content -LiteralPath $DeploymentPath -Raw | ConvertFrom-Json
+$connection = $deployment.connection
+$keyPath = $connection.KeyPath
+$knownHosts = $connection.KnownHostsPath
+$stateDirectory = Join-Path $env:USERPROFILE '.local\state\home-gateway'
+$null = New-Item -ItemType Directory -Path $stateDirectory -Force
+$settings = $deployment.hyperv
+$repoRoot = $PSScriptRoot

@@ -1,0 +1,17 @@
+services:
+  gateway:
+    image: ${GATEWAY_IMAGE:?Select an explicit image tag or digest in the deployment file}
+    build:
+      context: ./image
+      args:
+        BASE_IMAGE: ${GATEWAY_BASE_IMAGE:?Set the pinned base image from versions.json}
+    container_name: home-gateway
+    network_mode: host
+    cap_add: [NET_ADMIN, NET_RAW]
+    devices: [/dev/net/tun:/dev/net/tun]
+    volumes:
+      - ./config:/config:ro
+      - ./data:/data
+      - /etc/localtime:/etc/localtime:ro
+    restart: "no"
+    stop_grace_period: 30s
