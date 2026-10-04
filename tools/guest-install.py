@@ -14,6 +14,7 @@ import sys
 import tarfile
 import tempfile
 import time
+import uuid
 import yaml
 
 PROJECT = pathlib.Path('/opt/home-gateway')
@@ -23,6 +24,10 @@ PHASE = 'unpack'
 def run(command, **kwargs):
     result = subprocess.run(command, capture_output=True, timeout=kwargs.pop('timeout', 40), **kwargs)
     if result.returncode:
+        write(PROJECT / 'data/deployment-error.log', json.dumps({
+            'phase': PHASE, 'command': command[0], 'exit': result.returncode,
+            'stdout': result.stdout.decode(errors='replace')[-8192:],
+            'stderr': result.stderr.decode(errors='replace')[-8192:]}).encode())
         raise RuntimeError('Operation failed: ' + command[0])
     return result.stdout
 
@@ -120,20 +125,32 @@ def main():
         generated = render(config, yaml.safe_load((candidate_data / 'subscription/current.yaml').read_bytes()))
         write(stage / 'validation.yaml', yaml.safe_dump(generated, allow_unicode=True, sort_keys=False).encode())
         PHASE = 'build'
-        cached = False
+        recipe = image_recipe(stage)
+        build_record = data / 'builds' / (recipe + '.json')
+        candidate_image = None
+        if build_record.exists() and not bundle.get('rebuild'):
+            record = json.loads(build_record.read_text())
+            try:
+                candidate_image = run(['docker', 'image', 'inspect', record['image_id'], '--format', '{{.Id}}']).decode().strip()
+            except RuntimeError:
+                pass
         if previous.get('image') == bundle['image'] and not bundle.get('rebuild'):
             try:
-                image_id = run(['docker', 'image', 'inspect', bundle['image'], '--format', '{{.Id}}']).decode().strip()
-                cached = image_id == previous['image_id'] and image_recipe(stage) == image_recipe(PROJECT)
+                image_id = run(['docker', 'image', 'inspect', previous['image_id'], '--format', '{{.Id}}']).decode().strip()
+                if image_id == previous['image_id'] and recipe == image_recipe(PROJECT):
+                    candidate_image = image_id
             except (OSError, ValueError, KeyError, RuntimeError):
                 pass
-        if not cached:
+        if candidate_image is None:
+            candidate_image = 'home-gateway:build-' + uuid.uuid4().hex
             run(['docker', 'build', '--network=host', '--build-arg', 'BASE_IMAGE=' + versions['base_image'],
-                 '-t', bundle['image'], str(stage / 'image')], timeout=300)
+                 '-t', candidate_image, str(stage / 'image')], timeout=300)
+        candidate_id = run(['docker', 'image', 'inspect', candidate_image, '--format', '{{.Id}}']).decode().strip()
         PHASE = 'validate'
         run(['docker', 'run', '--rm', '--network=none', '--entrypoint', 'mihomo',
              '-v', str(candidate_data) + ':/data:ro', '-v', str(stage / 'validation.yaml') + ':/validate.yaml:ro',
-             bundle['image'], '-t', '-d', '/data/mihomo', '-f', '/validate.yaml'])
+             candidate_image, '-t', '-d', '/data/mihomo', '-f', '/validate.yaml'])
+        write(build_record, json.dumps({'recipe': recipe, 'image_id': candidate_id}).encode())
         install_ui(stage / 'artifacts/dashboard.tgz', stage / 'ui')
         if args.validate_only:
             print(json.dumps({'state': 'validated', 'version': versions['version'], 'running_gateway_unchanged': True}))
@@ -175,14 +192,23 @@ def main():
                 if target.exists():
                     shutil.rmtree(target)
                 shutil.copytree(stage / directory, target)
-            write(PROJECT / '.env', ('GATEWAY_IMAGE=' + bundle['image'] + '\nGATEWAY_BASE_IMAGE=' + versions['base_image'] + '\n').encode())
+            # Boot uses a deployment-specific tag; a later preflight cannot change it.
+            runtime_image = 'home-gateway:deployed-' + uuid.uuid4().hex
+            run(['docker', 'tag', candidate_id, runtime_image])
+            run(['docker', 'tag', candidate_id, bundle['image']])
+            write(PROJECT / '.env', ('GATEWAY_IMAGE=' + runtime_image + '\nGATEWAY_BASE_IMAGE=' + versions['base_image'] + '\n').encode())
             if ui.exists():
                 shutil.rmtree(ui)
             shutil.copytree(stage / 'ui', ui)
             for name in restored:
                 write(PROJECT / name, (stage / 'restore' / name).read_bytes())
+            # Explicit maintenance starts get a fresh budget, including the DNS watcher.
+            # Missing units are expected during the first installation.
+            subprocess.run(['systemctl', 'reset-failed', 'home-gateway', 'home-gateway-dns'],
+                           capture_output=True, timeout=40)
             run(['bash', str(PROJECT / 'install-guest.sh')])
             run(['bash', str(PROJECT / 'install-subscription.sh')])
+            run(['systemctl', 'reset-failed', 'home-gateway', 'home-gateway-dns'])
             run(['systemctl', 'restart', 'home-gateway-base', 'home-gateway-dns'])
             run(['systemctl', 'reset-failed', 'home-gateway'])
             run(['systemctl', 'start', 'home-gateway'])
@@ -204,6 +230,8 @@ def main():
         except Exception:
             PHASE = 'rollback'
             subprocess.run(['systemctl', 'stop', 'home-gateway'], capture_output=True, timeout=45)
+            if not (backup / 'install-guest.sh').exists():
+                raise RuntimeError('Initial deployment failed; inspect the private deployment log before retrying') from None
             for path in files:
                 old = backup / path.name
                 if old.exists():
@@ -242,9 +270,10 @@ def main():
                 shutil.copy2(old, saved)
                 old.unlink()
         receipt = {'state': 'success', 'version': versions['version'], 'image': bundle['image'],
-                   'image_id': run(['docker', 'image', 'inspect', bundle['image'], '--format', '{{.Id}}']).decode().strip(),
+                   'image_id': candidate_id, 'runtime_image': runtime_image,
                    'backup': str(backup), 'updated_at': datetime.datetime.now().astimezone().isoformat()}
         write(data / 'deployment.json', (json.dumps(receipt, indent=2) + '\n').encode())
+        (data / 'deployment-error.log').unlink(missing_ok=True)
         print(json.dumps(receipt))
 
 

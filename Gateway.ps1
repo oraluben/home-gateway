@@ -1,6 +1,6 @@
 [CmdletBinding()]
 param(
-    [ValidateSet('status','logs-vpn','logs-clash','logs-system','logs-subscription','update-subscription','start','stop','stop-vpn','stop-clash','retry-vpn','retry-clash','retry-dns')]
+    [ValidateSet('status','logs-vpn','logs-clash','logs-system','logs-subscription','logs-deployment','update-subscription','start','stop','stop-vpn','stop-clash','retry-vpn','retry-clash','retry-dns')]
     [string]$Action = 'status'
 )
 $ErrorActionPreference = 'Stop'
@@ -12,6 +12,7 @@ $commands = @{
     'logs-clash' = 'sudo tail -n 60 /opt/home-gateway/data/logs/clash.log'
     'logs-system' = 'sudo journalctl -u home-gateway -u home-gateway-dns --no-pager -n 60'
     'logs-subscription' = 'sudo journalctl -u home-gateway-subscription --no-pager -n 20'
+    'logs-deployment' = 'sudo cat /opt/home-gateway/data/deployment-error.log'
     'update-subscription' = 'sudo systemctl start home-gateway-subscription; gateway_update_result=$?; sudo cat /opt/home-gateway/data/subscription-status.json; exit $gateway_update_result'
     'start' = 'sudo systemctl reset-failed home-gateway home-gateway-dns; sudo systemctl start home-gateway-dns home-gateway'
     'stop' = 'sudo systemctl stop home-gateway'

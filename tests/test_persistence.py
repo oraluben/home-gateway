@@ -1,10 +1,12 @@
 import importlib.util
+import hashlib
 import io
 import json
 import pathlib
 import sys
 import tarfile
 import tempfile
+import types
 import unittest
 from unittest.mock import patch
 
@@ -103,6 +105,44 @@ class PersistenceTests(unittest.TestCase):
             with self.assertRaises(ValueError):
                 installer.install_ui(archive, root / 'ui')
             self.assertFalse((root / 'outside').exists())
+
+    def test_preflight_never_overwrites_a_boot_image_tag(self):
+        with tempfile.TemporaryDirectory() as directory:
+            project = pathlib.Path(directory)
+            (project / 'data/subscription').mkdir(parents=True)
+            (project / 'data/subscription/current.yaml').write_text('proxies: []')
+            image = 'home-gateway:test-release'
+            versions = {'version': 'test', 'image': image, 'base_image': 'base-digest',
+                        'mihomo': {'binary_sha256': hashlib.sha256(b'binary').hexdigest()},
+                        'dashboard': {'sha256': hashlib.sha256(b'ui').hexdigest()}}
+            bundle = {'version': 'test', 'image': image, 'runtime': {}, 'vpn_password': 'fake-test-value'}
+
+            def unpack(_, stage):
+                for name, body in {'versions.json': json.dumps(versions).encode(),
+                                   'image/mihomo': b'binary', 'artifacts/dashboard.tgz': b'ui'}.items():
+                    path = stage / name
+                    path.parent.mkdir(parents=True, exist_ok=True)
+                    path.write_bytes(body)
+
+            commands = []
+
+            def execute(command, **_):
+                commands.append(command)
+                return b'sha256:test-candidate\n' if command[:3] == ['docker', 'image', 'inspect'] else b''
+
+            with patch.object(installer, 'PROJECT', project), patch.object(installer, 'safe_extract', side_effect=unpack), \
+                 patch.object(installer, 'image_recipe', return_value='test-recipe'), \
+                 patch.object(installer, 'run', side_effect=execute), patch.object(installer, 'install_ui'), \
+                 patch.object(installer.importlib, 'import_module', return_value=types.SimpleNamespace(render_mihomo=lambda *_: {})), \
+                 patch.object(sys, 'argv', ['installer', '--source', 'fixture.tgz', '--validate-only']), \
+                 patch.object(sys, 'stdin', io.StringIO(json.dumps(bundle))), patch.object(sys, 'stdout', io.StringIO()):
+                installer.main()
+            build = next(command for command in commands if command[:2] == ['docker', 'build'])
+            candidate = build[build.index('-t') + 1]
+            self.assertTrue(candidate.startswith('home-gateway:build-'))
+            self.assertNotIn(image, [arg for command in commands for arg in command])
+            self.assertFalse(any(command[0] == 'systemctl' or command[:2] == ['docker', 'tag'] for command in commands))
+            self.assertFalse((project / '.env').exists())
 
 
 if __name__ == '__main__':
