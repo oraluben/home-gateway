@@ -34,6 +34,16 @@ def write(path, body, mode=0o600):
     path.chmod(mode)
 
 
+def image_recipe(project):
+    digest = hashlib.sha256()
+    digest.update(json.loads((project / 'versions.json').read_text())['base_image'].encode())
+    paths = list((project / 'image').glob('*.py')) + list((project / 'image/licenses').glob('*'))
+    paths += [project / 'image' / name for name in ('Dockerfile', '.dockerignore', 'mihomo')]
+    for path in sorted(paths):
+        digest.update(path.relative_to(project).as_posix().encode() + b'\0' + path.read_bytes())
+    return digest.hexdigest()
+
+
 def safe_extract(archive, target):
     with tarfile.open(archive, 'r:gz') as package:
         for entry in package.getmembers():
@@ -70,6 +80,7 @@ def main():
         stage = pathlib.Path(temporary)
         safe_extract(args.source, stage)
         versions = json.loads((stage / 'versions.json').read_text())
+        previous = json.loads((PROJECT / 'data/deployment.json').read_text()) if (PROJECT / 'data/deployment.json').exists() else {}
         if bundle['image'] != versions['image'] or bundle['version'] != versions['version']:
             raise ValueError('Deployment version mismatch')
         if hashlib.sha256((stage / 'image/mihomo').read_bytes()).hexdigest() != versions['mihomo']['binary_sha256']:
@@ -109,8 +120,16 @@ def main():
         generated = render(config, yaml.safe_load((candidate_data / 'subscription/current.yaml').read_bytes()))
         write(stage / 'validation.yaml', yaml.safe_dump(generated, allow_unicode=True, sort_keys=False).encode())
         PHASE = 'build'
-        run(['docker', 'build', '--network=host', '--build-arg', 'BASE_IMAGE=' + versions['base_image'],
-             '-t', bundle['image'], str(stage / 'image')], timeout=300)
+        cached = False
+        if previous.get('image') == bundle['image'] and not bundle.get('rebuild'):
+            try:
+                image_id = run(['docker', 'image', 'inspect', bundle['image'], '--format', '{{.Id}}']).decode().strip()
+                cached = image_id == previous['image_id'] and image_recipe(stage) == image_recipe(PROJECT)
+            except (OSError, ValueError, KeyError, RuntimeError):
+                pass
+        if not cached:
+            run(['docker', 'build', '--network=host', '--build-arg', 'BASE_IMAGE=' + versions['base_image'],
+                 '-t', bundle['image'], str(stage / 'image')], timeout=300)
         PHASE = 'validate'
         run(['docker', 'run', '--rm', '--network=none', '--entrypoint', 'mihomo',
              '-v', str(candidate_data) + ':/data:ro', '-v', str(stage / 'validation.yaml') + ':/validate.yaml:ro',
@@ -132,6 +151,12 @@ def main():
                 shutil.copy2(original, backup / path.name)
         if (PROJECT / '.env').exists():
             shutil.copy2(PROJECT / '.env', backup / '.env')
+            if previous.get('image_id'):
+                rollback_image = 'home-gateway:rollback-' + backup.name.removeprefix('deploy-')
+                run(['docker', 'tag', previous['image_id'], rollback_image])
+                lines = (backup / '.env').read_text().splitlines()
+                lines = ['GATEWAY_IMAGE=' + rollback_image if line.startswith('GATEWAY_IMAGE=') else line for line in lines]
+                write(backup / '.env', ('\n'.join(lines) + '\n').encode())
         ui = data / 'mihomo/ui'
         if ui.exists():
             shutil.copytree(ui, backup / 'ui')

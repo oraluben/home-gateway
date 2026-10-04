@@ -43,6 +43,8 @@ ssh <VM> 'sudo docker load' < home-gateway-0.2.0.tar.gz
 
 VM VHDX 和镜像归档是独立的恢复材料，不能提交公开 Git。对于当前已经运行的 VM，无需为了目录整齐移动在线磁盘；记录磁盘实际位置，后续重建使用操作机 `~/.local/state/home-gateway/vm`。
 
+配置部署和恢复会复用已部署、镜像 ID 与构建输入都匹配的镜像，避免每次维护都依赖镜像仓库网络。更新系统包时显式增加 `--rebuild`（Windows 为 `-Rebuild`）；组件版本变动需更新 `versions.json`。
+
 ## 故障检查
 
 - 先检查 `Gateway.ps1 status`，确认 DNS、VPN、透明代理和订阅最后成功时间。

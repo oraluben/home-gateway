@@ -41,9 +41,11 @@ def main():
     parser.add_argument('--config')
     parser.add_argument('--validate-only', action='store_true')
     parser.add_argument('--restore', help='Encrypted runtime snapshot; configuration still comes from yadm/pass')
+    parser.add_argument('--rebuild', action='store_true', help='Rebuild even when the deployed image matches the recipe')
     args = parser.parse_args()
     config = deployment(args.config)
     bundle = materialize(config)
+    bundle['rebuild'] = args.rebuild
     if args.restore:
         from backup import decrypt
         bundle['restore'] = base64.b64encode(decrypt(pathlib.Path(args.restore).expanduser())).decode()

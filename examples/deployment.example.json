@@ -14,7 +14,7 @@
     "VMName": "HomeGateway",
     "SwitchName": "HomeGateway-LAN",
     "PhysicalAdapterGuid": "00000000-0000-0000-0000-000000000000",
-    "MacAddress": "00155D7A4001",
+    "MacAddress": "00155D500001",
     "MemoryMB": 2048,
     "ProcessorCount": 2,
     "DiskSizeGB": 16,
