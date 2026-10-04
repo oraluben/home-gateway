@@ -5,6 +5,9 @@ $ErrorActionPreference = 'Stop'
 $statePath = Join-Path $stateDirectory 'dashboard-tunnel.json'
 $port = 19090
 $url = 'http://127.0.0.1:' + $port + '/ui/'
+$controller = $deployment.runtime.mihomo.'external-controller'
+if ($controller -notmatch '^([0-9.]+):([0-9]+)$') { throw 'Invalid dashboard controller address.' }
+$null = [System.Net.IPAddress]::Parse($Matches[1])
 $tunnel = $null
 function Copy-DashboardKey {
     $dashboardKey = & ssh.exe -i $keyPath -o ('UserKnownHostsFile=' + $knownHosts) -o StrictHostKeyChecking=yes -o BatchMode=yes -o ConnectTimeout=5 ($connection.User + '@' + $connection.Address) 'sudo python3 /opt/home-gateway/dashboard-key.py'
@@ -36,7 +39,7 @@ if (-not $tunnel) {
         throw 'Local port 19090 is occupied by another application; it will not be replaced.'
     }
     $key = $keyPath
-    $arguments = @('-N','-L',('127.0.0.1:' + $port + ':' + $connection.Address + ':9090'),'-i',('"' + $key + '"'),
+    $arguments = @('-N','-L',('127.0.0.1:' + $port + ':' + $controller),'-i',('"' + $key + '"'),
         '-o',('"UserKnownHostsFile=' + $knownHosts + '"'),'-o','StrictHostKeyChecking=yes',
         '-o','BatchMode=yes','-o','ConnectTimeout=5','-o','ExitOnForwardFailure=yes',
         '-o','ServerAliveInterval=15','-o','ServerAliveCountMax=2',($connection.User + '@' + $connection.Address))

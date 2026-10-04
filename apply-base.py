@@ -1,4 +1,5 @@
 import os
+import ipaddress
 import pathlib
 import sys
 import yaml
@@ -13,7 +14,10 @@ proxy_off()
 apply_base(config, read_policy())
 interface = config['network']['interface']
 addresses = __import__('json').loads(run(['ip', '-j', '-4', 'address', 'show', 'dev', interface]).stdout)
-address = next(a['local'] for entry in addresses for a in entry['addr_info'] if a['scope'] == 'global')
+expected = config['network'].get('address')
+expected = str(ipaddress.IPv4Interface(expected).ip) if expected else None
+address = next(a['local'] for entry in addresses for a in entry['addr_info']
+               if a['scope'] == 'global' and (not expected or a['local'] == expected))
 resolved = pathlib.Path('/etc/systemd/resolved.conf.d/90-home-gateway.conf')
 resolved.parent.mkdir(exist_ok=True)
 resolved.write_text('[Resolve]\nDNSStubListenerExtra=' + address + '\nLLMNR=no\nMulticastDNS=no\n')

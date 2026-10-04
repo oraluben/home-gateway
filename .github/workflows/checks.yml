@@ -12,8 +12,8 @@ jobs:
           python-version: '3.12'
       - run: pip install -r requirements.txt
       - run: python -m unittest discover -s tests -v
-      - run: python -m compileall -q image tools ./*.py
-      - run: bash -n guest-bootstrap.sh install-guest.sh install-subscription.sh
+      - run: python -m compileall -q image tools hosts ./*.py
+      - run: bash -n install-guest.sh install-subscription.sh
   powershell:
     runs-on: windows-latest
     steps:
@@ -21,7 +21,7 @@ jobs:
       - name: Parse management scripts without changing the host
         shell: pwsh
         run: |
-          Get-ChildItem *.ps1 | ForEach-Object {
+          Get-ChildItem -Recurse -Filter *.ps1 | ForEach-Object {
             $tokens = $null; $parseErrors = $null
             $null = [System.Management.Automation.Language.Parser]::ParseFile($_.FullName, [ref]$tokens, [ref]$parseErrors)
             if ($parseErrors) { throw ($parseErrors | Out-String) }

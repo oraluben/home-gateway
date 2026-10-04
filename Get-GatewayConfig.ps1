@@ -6,5 +6,4 @@ $keyPath = $connection.KeyPath
 $knownHosts = $connection.KnownHostsPath
 $stateDirectory = Join-Path $env:USERPROFILE '.local\state\home-gateway'
 $null = New-Item -ItemType Directory -Path $stateDirectory -Force
-$settings = $deployment.hyperv
 $repoRoot = $PSScriptRoot

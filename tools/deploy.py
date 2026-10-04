@@ -3,6 +3,7 @@ import argparse
 import base64
 import copy
 import io
+import importlib
 import json
 import pathlib
 import subprocess
@@ -13,6 +14,8 @@ from common import ROOT, deployment, remote, secret, ssh_command
 
 def materialize(config):
     runtime = copy.deepcopy(config['runtime'])
+    if config.get('network', {}).get('address'):
+        runtime['network']['address'] = config['network']['address']
     profiles = json.loads(pathlib.Path(config['vpn_profiles_file']).expanduser().read_text())
     vpn = profiles[config['vpn_profile']]
     runtime['vpn'].update(server=vpn['server'], username=vpn['username'], password_file='/config/secrets/vpn-password')
@@ -44,6 +47,11 @@ def main():
     parser.add_argument('--rebuild', action='store_true', help='Rebuild even when the deployed image matches the recipe')
     args = parser.parse_args()
     config = deployment(args.config)
+    # Host changes are explicit and separate from image/configuration deployment.
+    report = importlib.import_module('prepare-host').prepare(config)
+    if not report['ready']:
+        print(json.dumps(report, indent=2))
+        raise RuntimeError('Target is not ready; run tools/prepare-host.py --apply after resolving blockers')
     bundle = materialize(config)
     bundle['rebuild'] = args.rebuild
     if args.restore:
@@ -60,13 +68,6 @@ def main():
     if args.validate_only:
         command += ' --validate-only'
     try:
-        # A new cloud image has Python but may lack Docker and PyYAML.
-        bootstrap = ('if ! command -v docker >/dev/null; then '
-                     'tar -xOf /tmp/' + name + '.tar.gz guest-bootstrap.sh | sudo bash; '
-                     'elif ! python3 -c "import yaml" 2>/dev/null; then '
-                     'sudo apt-get -o Acquire::Retries=2 -o Acquire::http::Timeout=20 update && '
-                     'sudo apt-get -y install python3-yaml; fi')
-        remote(config, bootstrap, timeout=420)
         result = remote(config, command, json.dumps(bundle).encode(), timeout=420)
         print(result.decode().strip())
     finally:

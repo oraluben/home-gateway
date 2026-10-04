@@ -1,11 +1,13 @@
 [CmdletBinding()]
-param([switch]$ValidateOnly, [string]$Restore, [switch]$Rebuild)
-. (Join-Path $PSScriptRoot 'Get-GatewayConfig.ps1')
-$linuxRepo = & wsl.exe -d $deployment.operator.WslDistribution -- wslpath -u ($PSScriptRoot.Replace('\','/'))
-if ($LASTEXITCODE -ne 0) { throw 'Could not resolve the operator repository path.' }
-$arguments = @('-d',$deployment.operator.WslDistribution,'--','python3',($linuxRepo.Trim()+'/tools/deploy.py'))
+param([switch]$ValidateOnly, [string]$Restore, [switch]$Rebuild,
+      [string]$DeploymentPath = (Join-Path $env:USERPROFILE '.config\home-gateway\deployment.json'))
+. (Join-Path $PSScriptRoot 'Get-GatewayConfig.ps1') -DeploymentPath $DeploymentPath
+$arguments = @()
 if ($ValidateOnly) { $arguments += '--validate-only' }
 if ($Rebuild) { $arguments += '--rebuild' }
-if ($Restore) { $restorePath = (& wsl.exe -d $deployment.operator.WslDistribution -- wslpath -a ($Restore.Replace('\','/'))).Trim(); $arguments += @('--restore', $restorePath) }
-& wsl.exe @arguments
-if ($LASTEXITCODE -ne 0) { throw 'Gateway deployment failed; check operator GPG access and gateway status.' }
+if ($Restore) {
+    $restorePath = & wsl.exe -d $deployment.operator.WslDistribution -- wslpath -a ($Restore.Replace('\','/'))
+    if ($LASTEXITCODE -ne 0) { throw 'Could not resolve the restore file path.' }
+    $arguments += @('--restore', $restorePath.Trim())
+}
+& (Join-Path $PSScriptRoot 'Invoke-GatewayTool.ps1') -Tool deploy.py -ToolArguments $arguments -DeploymentPath $DeploymentPath

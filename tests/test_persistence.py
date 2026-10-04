@@ -72,7 +72,8 @@ class PersistenceTests(unittest.TestCase):
             profile = pathlib.Path(directory) / 'profiles.json'
             profile.write_text(json.dumps({'vpn2': {'server': 'vpn.example.invalid', 'username': 'operator',
                                                    'credential': 'existing-vpn'}}))
-            config = {'runtime': {'vpn': {'attempts': 1}, 'subscription': {}, 'mihomo': {}},
+            config = {'runtime': {'vpn': {'attempts': 1}, 'subscription': {}, 'mihomo': {}, 'network': {}},
+                      'network': {'address': '192.168.50.201/24'},
                       'vpn_profiles_file': str(profile), 'vpn_profile': 'vpn2',
                       'secrets': {'subscription_url': 'sub', 'controller': 'panel'}}
             with patch.object(deploy, 'secret', side_effect=lambda entry: 'resolved-' + entry):
@@ -81,6 +82,8 @@ class PersistenceTests(unittest.TestCase):
             self.assertEqual(bundle['runtime']['vpn']['server'], 'vpn.example.invalid')
             self.assertEqual(bundle['runtime']['vpn']['password_file'], '/config/secrets/vpn-password')
             self.assertEqual(config['runtime']['subscription'], {})
+            self.assertEqual(bundle['runtime']['network']['address'], '192.168.50.201/24')
+            self.assertEqual(config['runtime']['network'], {})
 
     def test_guest_rejects_symlink_in_source_package(self):
         with tempfile.TemporaryDirectory() as directory:

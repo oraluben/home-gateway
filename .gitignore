@@ -19,6 +19,8 @@ __pycache__/
 *.key
 *.pem
 *.vhdx
+*.qcow2
+*.img
 *.iso
 *.tar.gz
 *.gpg

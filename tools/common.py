@@ -10,16 +10,28 @@ ROOT = pathlib.Path(__file__).resolve().parents[1]
 def deployment(path=None):
     path = pathlib.Path(path or os.environ.get('HOME_GATEWAY_DEPLOYMENT', '~/.config/home-gateway/deployment.json')).expanduser()
     value = json.loads(path.read_text())
+    # v0.2 operator files remain usable without changing private yadm data.
+    if 'host' not in value:
+        value['host'] = ({'backend': 'hyperv', 'hyperv': value['hyperv']}
+                         if 'hyperv' in value else {'backend': 'linux'})
+    if value['host'].get('backend') not in ('hyperv', 'linux'):
+        raise ValueError('Supported host backends: hyperv, linux')
     return value
 
 
 def ssh_command(config):
     connection = config['connection']
-    command = [connection.get('SshExecutable', 'ssh'), '-i', connection['KeyPath'],
-               '-o', 'UserKnownHostsFile=' + connection['KnownHostsPath'],
+    command = [connection.get('SshExecutable', 'ssh'), '-i', os.path.expanduser(connection['KeyPath']),
+               '-o', 'UserKnownHostsFile=' + os.path.expanduser(connection['KnownHostsPath']),
                '-o', 'StrictHostKeyChecking=yes', '-o', 'BatchMode=yes', '-o', 'ConnectTimeout=8',
                connection['User'] + '@' + connection['Address']]
     return command
+
+
+def host_inputs(config):
+    """Only non-secret target settings are sent to the host initializer."""
+    return {'network': config['network'], 'interface': config['runtime']['network']['interface'],
+            'controller': config['runtime']['mihomo']['external-controller']}
 
 
 def remote(config, command, content=None, timeout=120):

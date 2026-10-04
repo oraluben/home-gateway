@@ -2,13 +2,9 @@
   "connection": {
     "Address": "192.168.50.201",
     "User": "gateway",
-    "SshExecutable": "/mnt/c/Windows/System32/OpenSSH/ssh.exe",
-    "KeyPath": "C:/Users/YOURUSER/.ssh/home-gateway_ed25519",
-    "KnownHostsPath": "C:/Users/YOURUSER/.ssh/home-gateway_known_hosts",
-    "PublicKey": "ssh-ed25519 REPLACE_WITH_YOUR_PUBLIC_KEY"
-  },
-  "operator": {
-    "WslDistribution": "Ubuntu-26.04"
+    "SshExecutable": "ssh",
+    "KeyPath": "~/.ssh/home-gateway_ed25519",
+    "KnownHostsPath": "~/.ssh/home-gateway_known_hosts"
   },
   "network": {
     "address": "192.168.50.201/24",
@@ -26,7 +22,7 @@
   },
   "runtime": {
     "network": {
-      "interface": "eth0",
+      "interface": "enp1s0",
       "clients": [
         "192.168.50.0/24",
         "192.168.60.0/24"
@@ -66,16 +62,6 @@
     }
   },
   "host": {
-    "backend": "hyperv",
-    "hyperv": {
-      "VMName": "HomeGateway",
-      "SwitchName": "HomeGateway-LAN",
-      "PhysicalAdapterGuid": "00000000-0000-0000-0000-000000000000",
-      "MacAddress": "00155D500001",
-      "MemoryMB": 2048,
-      "ProcessorCount": 2,
-      "DiskSizeGB": 16,
-      "BaseImage": "https://cloud-images.ubuntu.com/releases/noble/release-20260926/ubuntu-24.04-server-cloudimg-amd64.img"
-    }
+    "backend": "linux"
   }
 }

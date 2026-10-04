@@ -2,7 +2,7 @@
 
 ## 私有配置
 
-`deployment.json` 包含网络、Hyper-V 参数、VPN profile 名称、pass 项目名称以及本地网关覆盖设置。`vpn/profiles.json` 包含服务端、用户名和凭据引用；交互式 `vpn`/`vpn2` 与网关部署可以共用它。密码继续由现有 pass 项目管理，无需把整个 yadm checkout 交给容器。
+`deployment.json` 包含网络、`host.backend` 与对应平台参数、VPN profile 名称、pass 项目名称以及本地网关覆盖设置。`vpn/profiles.json` 包含服务端、用户名和凭据引用；交互式 `vpn`/`vpn2` 与网关部署可以共用它。密码继续由现有 pass 项目管理，无需把整个 yadm checkout 交给容器。
 
 如果 yadm 在多台电脑上同步，可将家庭部署文件命名为 `deployment.json##class.home-gateway`，只在家庭操作机设置 `yadm config --add local.class home-gateway` 后执行 `yadm alt`。VPN profiles 可以在公司电脑上通用。加密凭据按现有 `.password-store/.gpg-id` 管理收件人；更换设备需要相应 GPG 私钥。
 
@@ -25,7 +25,7 @@ python3 tools/backup.py verify --file ~/.local/state/home-gateway/backups/gatewa
 
 ## 恢复
 
-在同一 VM 或重新准备的 VM 上恢复：
+在同一网关或重新准备的 Ubuntu 目标上恢复；Hyper-V 与 Linux 原生部署使用相同备份格式：
 
 ```sh
 python3 tools/deploy.py --restore /path/to/gateway-backup.tar.gz.gpg --validate-only
@@ -34,11 +34,11 @@ python3 tools/deploy.py --restore /path/to/gateway-backup.tar.gz.gpg
 
 Windows 使用 `./Deploy-Gateway.ps1 -Restore <文件> -ValidateOnly` 预检，去掉 `-ValidateOnly` 应用。恢复仍以当前 yadm/pass 配置为准，备份中的配置副本用于核对历史；只应用缓存和节点选择。镜像及配置验证成功后才停止服务，已有部署的代码、配置与 UI 保存在 VM 的 `data/backups/deploy-*`，恢复检查失败则回退。
 
-全新 VM 先通过 `Prepare-VM.ps1` 与 `Initialize-VM.ps1` 准备。核验新 VM 的 SSH 主机密钥后更新 known_hosts。基础镜像下载、Docker 软件源和首次构建仍需要网络；可以在维护前保存本机镜像：
+全新 Hyper-V VM 先通过 `Prepare-VM.ps1` 与 `Initialize-VM.ps1` 准备；Linux 主机先安装系统并配置静态网络。核验目标的 SSH 主机密钥后更新 known_hosts，两种目标都先执行 `tools/prepare-host.py --apply` 再预检和恢复。基础镜像下载、Docker 软件源和首次构建仍需要网络；可以在维护前保存本机镜像：
 
 ```sh
-ssh <VM> 'sudo docker save home-gateway:0.2.0 | gzip' > home-gateway-0.2.0.tar.gz
-ssh <VM> 'sudo docker load' < home-gateway-0.2.0.tar.gz
+ssh <网关> 'sudo docker save home-gateway:0.3.0 | gzip' > home-gateway-0.3.0.tar.gz
+ssh <网关> 'sudo docker load' < home-gateway-0.3.0.tar.gz
 ```
 
 VM VHDX 和镜像归档是独立的恢复材料，不能提交公开 Git。对于当前已经运行的 VM，无需为了目录整齐移动在线磁盘；记录磁盘实际位置，后续重建使用操作机 `~/.local/state/home-gateway/vm`。
@@ -49,7 +49,7 @@ VM VHDX 和镜像归档是独立的恢复材料，不能提交公开 Git。对�
 
 ## 故障检查
 
-- 先检查 `Gateway.ps1 status`，确认 DNS、VPN、透明代理和订阅最后成功时间。
+- 先检查 `python3 tools/gateway.py status`（Windows 为 `Gateway.ps1 status`），确认 DNS、VPN、透明代理和订阅最后成功时间。
 - VPN 失败看 `logs-vpn`，修复账号/线路后 `retry-vpn`；不会不停重新登录。
 - 代理失败看 `logs-clash`，修复后 `retry-clash`。
 - 订阅失败看 `logs-subscription`；上次有效配置继续运行，不需要重启 VPN。

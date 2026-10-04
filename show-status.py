@@ -1,8 +1,10 @@
 import json
 import pathlib
 import subprocess
+import yaml
 
 DATA = pathlib.Path('/opt/home-gateway/data')
+CONFIG = pathlib.Path('/opt/home-gateway/config/gateway.yaml')
 
 
 def command(args):
@@ -17,8 +19,9 @@ def read(name):
         return None
 
 
+interface = yaml.safe_load(CONFIG.read_text())['network']['interface']
 print(json.dumps({
-    'addresses': json.loads(command(['ip', '-j', '-4', 'address', 'show', 'dev', 'eth0'])),
+    'addresses': json.loads(command(['ip', '-j', '-4', 'address', 'show', 'dev', interface])),
     'services': {name: command(['systemctl', 'is-active', name]) for name in
                  ('home-gateway-base', 'home-gateway-dns', 'home-gateway', 'docker', 'systemd-resolved')},
     'controller': read('status.json'),
