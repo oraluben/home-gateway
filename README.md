@@ -107,6 +107,8 @@ Windows 的便捷入口使用同一套维护动作；面板入口额外处理 Wi
 
 维护与恢复：[docs/persistence.md](docs/persistence.md)。组件与故障边界：[docs/architecture.md](docs/architecture.md)。第三方许可：[THIRD_PARTY.md](THIRD_PARTY.md)。
 
+Windows 有线网络故障可运行 `./Host-Network.ps1` 导出检查报告；提前以管理员身份运行 `./Host-Network.ps1 -EnableLogging` 开启有大小上限的 DHCP 详细日志，故障后拿回主机仍可查看。详见 [平台部署说明](docs/hosts.md)。
+
 ## 验证与限制
 
 ```sh

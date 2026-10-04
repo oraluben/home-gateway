@@ -18,6 +18,14 @@ pass 部署条目使用 `host: {"backend": "hyperv", "hyperv": {...}}`，描述�
 
 新建的顺序：准备固定版本的 cloud image 与 seed，创建 VM，核验 SSH 主机密钥，准备 Ubuntu 目标，预检并部署。顶层 `Prepare-VM.ps1`、`Initialize-VM.ps1`、`Get-VMStatus.ps1`、`Restore-HostNetwork.ps1` 继续可用。磁盘转换和 ISO 创建留在 Hyper-V 适配中，cloud-init 内容由共享工具生成。
 
+### Windows 有线网络排查
+
+`./Host-Network.ps1` 导出本机地址、DHCP 租约、路由、网卡计数、远程桌面状态以及最近两天的网络/启动日志。按接口 GUID 和当前接口索引记录，不依赖重启后可能变化的索引。管理员运行时还会记录 Hyper-V 启动设置、交换机和 VLAN；普通权限无法读取的项目在报告中注明。
+
+建议在管理员 PowerShell 中预先运行 `./Host-Network.ps1 -EnableLogging`：开启 Windows 自带的 DHCP Operational 日志，使用 4 MiB 循环存储，下次开机或网络中断时自动记录，无需用户登录或额外的常驻程序。它不修改 IP、网关、DNS、交换机或电源设置，也不重连网络。原日志设置保存在本地，可用 `-RestoreLogging` 恢复。
+
+报告默认保存到 `~/.local/state/home-gateway/network/`。故障后即使只能把主机拿回来，再运行一次导出即可。报告含本机 IP、MAC、设备名称和网络事件，应留在本地，分享前检查内容；工具不读取 pass、VPN 密码或订阅配置。若 DHCP 失败，报告能确认失败时间和客户端状态，但定位墙口、光猫端口或链路上的丢包仍需要现场对照或抓包。Windows 显示 `169.254.*` 表示 IPv4 自动配置回退；VM 的固定地址和链路 Up 状态不能证明上游可达。
+
 ## 专用 Linux 主机
 
 使用 `examples/deployment.linux.example.json`。它不需要 Hyper-V、WSL、虚拟机参数或 SSH 公钥注入字段。操作机的 SSH 私钥与 known_hosts 支持 `~`；`runtime.network.interface` 填实际的网卡名，例如 `enp1s0`。不要把配置中的示例接口照搬到目标。
