@@ -5,7 +5,7 @@ import signal
 import subprocess
 import time
 import yaml
-from network import DATA, apply_base, proxy_off, proxy_on, read_policy, run, save_json
+from network import DATA, apply_base, ensure_proxy_routing, proxy_off, proxy_on, read_policy, run, save_json
 from configuration import render_mihomo
 from runtime import CONFIG, load_config
 from vpn_auth import openconnect_command
@@ -116,6 +116,7 @@ if config['vpn'].get('enabled', True):
     components.append(Component('vpn', vpn_command, vpn.get('attempts', 1), password_file))
 
 last_network_state = None
+last_routing_check = 0
 last_rotate = 0
 try:
     while not stopping:
@@ -143,7 +144,12 @@ try:
             else:
                 proxy_off()
             last_network_state = network_state
+            last_routing_check = time.monotonic()
             print(f'Network updated: proxy={capture}, VPN={policy.get("up", False)}', flush=True)
+        elif capture and time.monotonic() - last_routing_check >= 5:
+            if ensure_proxy_routing():
+                print('Transparent proxy routing restored after external changes', flush=True)
+            last_routing_check = time.monotonic()
         save_json(DATA / 'status.json', {'updated_at': time.strftime('%Y-%m-%dT%H:%M:%S%z'),
                                        'transparent_proxy': capture, 'vpn_connected': policy.get('up', False),
                                        'vpn_prefix_count': len(policy.get('prefixes', [])),

@@ -1,7 +1,11 @@
 import json
 import pathlib
 import subprocess
+import sys
 import yaml
+
+sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent / 'image'))
+from network import proxy_routing_status
 
 DATA = pathlib.Path('/opt/home-gateway/data')
 CONFIG = pathlib.Path('/opt/home-gateway/config/gateway.yaml')
@@ -25,6 +29,7 @@ print(json.dumps({
     'services': {name: command(['systemctl', 'is-active', name]) for name in
                  ('home-gateway-base', 'home-gateway-dns', 'home-gateway', 'docker', 'systemd-resolved')},
     'controller': read('status.json'),
+    'proxy_routing': proxy_routing_status(),
     'dns_policy': read('dns-status.json'),
     'container': command(['docker', 'inspect', 'home-gateway', '--format', '{{.State.Status}}']),
     'subscription': read('subscription-status.json'),

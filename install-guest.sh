@@ -3,6 +3,16 @@ set -euo pipefail
 cd /opt/home-gateway
 chmod 0700 data
 chmod 0700 config config/secrets
+# The appliance owns its policy rules. networkd otherwise removes them when
+# package updates restart it, while the proxy and VPN continue running.
+install -d -m 0755 /etc/systemd/networkd.conf.d
+cat >/etc/systemd/networkd.conf.d/90-home-gateway.conf <<'EOF'
+[Network]
+ManageForeignRoutingPolicyRules=no
+EOF
+chmod 0644 /etc/systemd/networkd.conf.d/90-home-gateway.conf
+# No network restart during installation; the routing supervisor also repairs
+# missing rules until networkd next reads this setting at startup.
 cat >/etc/systemd/system/home-gateway-base.service <<'EOF'
 [Unit]
 Description=Home gateway base forwarding and DNS
