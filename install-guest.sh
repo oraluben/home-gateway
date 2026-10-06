@@ -3,6 +3,7 @@ set -euo pipefail
 cd /opt/home-gateway
 chmod 0700 data
 chmod 0700 config config/secrets
+install -m 0755 gatewayctl.sh /usr/local/bin/gatewayctl
 # The appliance owns its policy rules. networkd otherwise removes them when
 # package updates restart it, while the proxy and VPN continue running.
 install -d -m 0755 /etc/systemd/networkd.conf.d

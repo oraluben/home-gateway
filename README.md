@@ -80,6 +80,22 @@ Linux 原生部署先安装 Ubuntu、设置持久静态 IPv4 和上级默认网�
 
 ## 日常使用
 
+日常排查直接 SSH 到网关，不需要在操作机下载仓库、安装 Python、解锁 pass：
+
+```sh
+ssh gateway@<网关-IP>
+gatewayctl status          # 组件状态、重试等待、实际路由与 DNS 状态
+gatewayctl check           # 普通网络、代理和配置的内网站点连通性
+gatewayctl logs-vpn
+gatewayctl retry-vpn
+gatewayctl stop-vpn        # 停止 VPN 并暂停自动重试
+gatewayctl logs-system     # VM 服务日志，容器停止时也可使用
+```
+
+`gatewayctl` 的诊断和组件控制逻辑位于镜像内。网关的同名入口只负责权限、容器执行以及容器停机时的基础诊断；原生 Linux 主机使用相同入口。`status --json`、`check --json` 可用于机器读取。公司站点探测使用部署配置中的 `runtime.diagnostics.corporate_url`，也可临时传入 `gatewayctl check --corporate-url https://<内网地址>/`；401/403 表示站点可达但需要应用授权。
+
+VPN 默认断线后最多自动重连 3 次，间隔 15、30、60 秒；连续稳定连接 10 分钟后恢复预算，连续失败则停止。停止和重试可单独操作 VPN，Mihomo 的重试策略独立。
+
 Linux / WSL 操作机：
 
 ```sh

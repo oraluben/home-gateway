@@ -2,13 +2,13 @@ import json
 import os
 import pathlib
 import signal
-import subprocess
 import time
 import yaml
 from network import DATA, apply_base, ensure_proxy_routing, proxy_off, proxy_on, read_policy, run, save_json
 from configuration import render_mihomo
 from runtime import CONFIG, load_config
 from vpn_auth import openconnect_command
+from component import Component
 
 DATA.mkdir(exist_ok=True)
 LOGS = DATA / 'logs'
@@ -24,55 +24,6 @@ def stop_signal(*_):
 
 signal.signal(signal.SIGTERM, stop_signal)
 signal.signal(signal.SIGINT, stop_signal)
-
-
-class Component:
-    def __init__(self, name, command, max_attempts, password=None):
-        self.name, self.command = name, command
-        self.max_attempts, self.password = max_attempts, password
-        self.process, self.log = None, None
-        self.attempts, self.next_attempt, self.last_exit = 0, 0, None
-
-    def poll(self):
-        if self.process and self.process.poll() is not None:
-            self.last_exit = self.process.returncode
-            self.process = None
-            self.log.close()
-            self.next_attempt = time.monotonic() + 5
-            print(f'{self.name}: exited with {self.last_exit}; attempt {self.attempts}/{self.max_attempts}', flush=True)
-            if self.name == 'vpn':
-                policy = read_policy()
-                policy['up'] = False
-                save_json(DATA / 'vpn-policy.json', policy)
-        if not self.process and self.attempts < self.max_attempts and time.monotonic() >= self.next_attempt:
-            self.log = (LOGS / (self.name + '.log')).open('ab', buffering=0)
-            self.attempts += 1
-            self.process = subprocess.Popen(self.command, stdin=subprocess.PIPE if self.password else subprocess.DEVNULL,
-                                            stdout=self.log, stderr=self.log, start_new_session=True)
-            if self.password:
-                self.process.stdin.write((self.password.read_text().rstrip('\r\n') + '\n').encode())
-                self.process.stdin.close()
-            print(f'{self.name}: started, attempt {self.attempts}/{self.max_attempts}', flush=True)
-
-    def status(self):
-        return {'state': 'running' if self.process else ('stopped' if self.attempts >= self.max_attempts else 'retry-wait'),
-                'attempts': self.attempts, 'max_attempts': self.max_attempts, 'last_exit': self.last_exit}
-
-    def stop(self):
-        if self.process and self.process.poll() is None:
-            os.killpg(self.process.pid, signal.SIGTERM)
-            try:
-                self.process.wait(timeout=20)
-            except subprocess.TimeoutExpired:
-                os.killpg(self.process.pid, signal.SIGKILL)
-                self.process.wait(timeout=5)
-        if self.log and not self.log.closed:
-            self.log.close()
-        self.process = None
-        if self.name == 'vpn':
-            policy = read_policy()
-            policy['up'] = False
-            save_json(DATA / 'vpn-policy.json', policy)
 
 
 def ready(port):
@@ -113,7 +64,10 @@ if config['clash'].get('enabled', True):
 if config['vpn'].get('enabled', True):
     vpn = config['vpn']
     vpn_command, password_file = openconnect_command(vpn, CONFIG.parent)
-    components.append(Component('vpn', vpn_command, vpn.get('attempts', 1), password_file))
+    components.append(Component('vpn', vpn_command, vpn.get('attempts', 4), password_file,
+                                retry_delay=vpn.get('retry_delay_seconds', 15),
+                                retry_max_delay=vpn.get('retry_max_delay_seconds', 60),
+                                stable_reset_seconds=vpn.get('stable_reset_seconds', 600)))
 
 last_network_state = None
 last_routing_check = 0
@@ -124,15 +78,12 @@ try:
             stop_file = DATA / ('stop-' + component.name)
             if stop_file.exists():
                 stop_file.unlink()
-                component.stop()
-                component.attempts = component.max_attempts
+                component.disable()
             retry_file = DATA / ('retry-' + component.name)
             if retry_file.exists():
                 retry_file.unlink()
-                component.stop()
-                component.attempts = 0
-                component.next_attempt = 0
-            component.poll()
+                component.retry()
+            component.poll(healthy=component.name == 'vpn' and read_policy().get('up', False))
         policy = read_policy()
         clash = next((c for c in components if c.name == 'clash'), None)
         capture = bool(clash and clash.process and ready(7893))

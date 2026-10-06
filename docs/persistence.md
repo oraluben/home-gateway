@@ -72,7 +72,7 @@ VM VHDX 和镜像归档是独立的恢复材料，不能提交公开 Git。对�
 ## 故障检查
 
 - 先检查 `python3 tools/gateway.py status`（Windows 为 `Gateway.ps1 status`），确认 DNS、VPN、透明代理和订阅最后成功时间。
-- VPN 失败看 `logs-vpn`，修复账号/线路后 `retry-vpn`；不会不停重新登录。
+- VPN 断线后自动进行有限重试，耗尽预算后停止；看 `status` 的次数/等待时间和 `logs-vpn`，修复账号/线路后用 `retry-vpn` 恢复预算。部署配置可调整 `attempts`、`retry_delay_seconds`、`retry_max_delay_seconds`、`stable_reset_seconds`。
 - 代理失败看 `logs-clash`，修复后 `retry-clash`。
 - 订阅失败看 `logs-subscription`；上次有效配置继续运行，不需要重启 VPN。
 - VM 完全无法启动：把下游路由器 WAN 的网关和 DNS 改回上级网关，先恢复普通上网，再修复 VM。

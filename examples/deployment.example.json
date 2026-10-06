@@ -34,7 +34,10 @@
     "vpn": {
       "enabled": true,
       "interface": "vpn0",
-      "attempts": 1,
+      "attempts": 4,
+      "retry_delay_seconds": 15,
+      "retry_max_delay_seconds": 60,
+      "stable_reset_seconds": 600,
       "reconnect_timeout": 30
     },
     "mihomo": {
