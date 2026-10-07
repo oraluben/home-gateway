@@ -34,6 +34,9 @@ def status():
     age = round(time.time() - path.stat().st_mtime, 1) if path.exists() else None
     routing = proxy_routing_status()
     forwarding = pathlib.Path('/proc/sys/net/ipv4/ip_forward').read_text().strip() == '1'
+    source_marks = {interface: int(pathlib.Path('/proc/sys/net/ipv4/conf/' + interface + '/src_valid_mark').read_text())
+                    for interface in ('all', config['network']['interface'])}
+    source_validation = {'ready': not any(source_marks.values()), 'src_valid_mark': source_marks}
     proxy_rules = command(['nft', 'list', 'table', 'inet', 'home_gateway_proxy']).returncode == 0
     base_rules = command(['nft', 'list', 'table', 'inet', 'home_gateway_base']).returncode == 0
     receipt = read_json('deployment.json') or {}
@@ -46,6 +49,7 @@ def status():
             'supervisor_status_fresh': age is not None and -5 <= age < 10,
             'proxy_routing': routing, 'proxy_rules_present': proxy_rules,
             'base_rules_present': base_rules, 'forwarding_enabled': forwarding,
+            'source_validation': source_validation,
             'dns_policy': read_json('dns-status.json'),
             'subscription': {key: subscription[key] for key in ('state', 'last_attempt', 'last_success', 'error', 'nodes', 'groups', 'rules') if key in subscription}}
 
@@ -65,8 +69,11 @@ def print_status(value):
         delay = item.get('retry_in_seconds')
         waiting = f'; retry in {delay}s' if delay is not None else ''
         print(f'{name}: {state}; attempts {item["attempts"]}/{item["max_attempts"]}{waiting}')
-    proxy = bool(controller.get('transparent_proxy') and value['proxy_routing']['ready'] and value['proxy_rules_present'])
+    proxy = bool(controller.get('transparent_proxy') and value['proxy_routing']['ready'] and value['proxy_rules_present']
+                 and value['source_validation']['ready'])
     print('Transparent proxy: ' + ('ready' if proxy else 'inactive or incomplete'))
+    if not value['source_validation']['ready']:
+        print('Source validation: src_valid_mark conflicts with transparent routing; inspect host services')
     print('Base forwarding: ' + ('ready' if value['forwarding_enabled'] and value['base_rules_present'] else 'incomplete'))
     dns = value.get('dns_policy') or {}
     print('Corporate DNS: ' + ('active' if dns.get('vpn_dns_active') else 'inactive')
@@ -131,7 +138,7 @@ def main(argv=None):
         dns = value.get('dns_policy') or {}
         if controller.get('vpn_connected') and (not dns.get('vpn_dns_active') or dns.get('error')):
             return 1
-        if 'clash' in controller.get('components', {}) and not (controller.get('transparent_proxy') and value['proxy_routing']['ready'] and value['proxy_rules_present']):
+        if 'clash' in controller.get('components', {}) and not (controller.get('transparent_proxy') and value['proxy_routing']['ready'] and value['proxy_rules_present'] and value['source_validation']['ready']):
             return 1
         return 0 if all(check['reachable'] for check in value.get('checks', [])) else 1
     if args.action.startswith('logs-'):

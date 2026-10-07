@@ -13,6 +13,7 @@ DAEMON = pathlib.Path('/etc/docker/daemon.json')
 SYSCTL = pathlib.Path('/etc/sysctl.d/90-home-gateway.conf')
 BACKUP = pathlib.Path('/var/lib/home-gateway/host-before')
 DOCKER_NETWORK = {'bridge': 'none', 'iptables': False, 'ip6tables': False, 'ip-forward': False}
+TAILSCALE_RECEIPT = pathlib.Path('/var/lib/home-gateway/tailscale-managed.json')
 APT = ['apt-get', '-o', 'Acquire::Retries=2', '-o', 'Acquire::http::Timeout=20',
        '-o', 'Acquire::https::Timeout=20']
 
@@ -54,7 +55,8 @@ def sysctls(interface):
     return {'net/ipv4/ip_forward': '1', 'net/ipv4/conf/all/send_redirects': '0',
             'net/ipv4/conf/default/send_redirects': '0', f'net/ipv4/conf/{interface}/send_redirects': '0',
             'net/ipv4/conf/all/rp_filter': '0', 'net/ipv4/conf/default/rp_filter': '0',
-            f'net/ipv4/conf/{interface}/rp_filter': '0'}
+            f'net/ipv4/conf/{interface}/rp_filter': '0', 'net/ipv4/conf/all/src_valid_mark': '0',
+            'net/ipv4/conf/default/src_valid_mark': '0', f'net/ipv4/conf/{interface}/src_valid_mark': '0'}
 
 
 def sysctl_text(interface):
@@ -71,6 +73,62 @@ def docker_settings(existing):
     if value['log-driver'] == 'local':
         value.setdefault('log-opts', {'max-size': '10m', 'max-file': '3'})
     return value
+
+
+def managed_tailscale_table(family, name):
+    """Accept only project-installed Tailscale tables, rejecting foreign hooks."""
+    if family not in ('ip', 'ip6') or name not in ('filter', 'nat', 'mangle'):
+        return False
+    try:
+        receipt = json.loads(read(TAILSCALE_RECEIPT, '{}'))
+        if receipt.get('schema') != 1 or receipt.get('firewall') != 'nftables' or not shutil.which('tailscale'):
+            return False
+        environment = command(['systemctl', 'show', '-p', 'Environment', '--value', 'tailscaled'])
+        if environment.returncode or 'TS_DEBUG_FIREWALL_MODE=nftables' not in environment.stdout.split():
+            return False
+        table = command(['nft', '-j', 'list', 'table', family, name])
+        if table.returncode:
+            return False
+        hooks = {'INPUT': ('input', 0, 'ts-input'), 'FORWARD': ('forward', 0, 'ts-forward')} if name == 'filter' else (
+            {'POSTROUTING': ('postrouting', 100, 'ts-postrouting')} if name == 'nat' else {
+                'PREROUTING': ('prerouting', -150, None), 'OUTPUT': ('output', -150, None)})
+        for item in json.loads(table.stdout).get('nftables', []):
+            if set(item) & {'metainfo', 'table'}:
+                continue
+            chain = item.get('chain')
+            if chain is not None:
+                cname = chain.get('name')
+                if cname in hooks:
+                    hook, priority, _ = hooks[cname]
+                    if (chain.get('hook'), chain.get('prio'), chain.get('policy')) != (hook, priority, 'accept'):
+                        return False
+                elif cname not in {v[2] for v in hooks.values()} or 'hook' in chain:
+                    return False
+            elif 'rule' in item:
+                rule = item['rule']
+                cname = rule.get('chain')
+                if cname in hooks:
+                    expressions = [expression for expression in rule.get('expr', []) if 'counter' not in expression]
+                    expected = tailscale_connmark_rule(cname) if name == 'mangle' else [
+                        {'jump': {'target': hooks[cname][2]}}]
+                    if expressions != expected:
+                        return False
+                elif cname not in {v[2] for v in hooks.values()}:
+                    return False
+            else:
+                return False
+        return True
+    except (ValueError, TypeError, KeyError):
+        return False
+
+
+def tailscale_connmark_rule(chain):
+    """Pinned Tailscale connmark rules, not permission for arbitrary mangle rules."""
+    source, target = ('ct', 'meta') if chain == 'PREROUTING' else ('meta', 'ct')
+    return [{'match': {'op': 'in', 'left': {'ct': {'key': 'state'}},
+                       'right': ['established', 'related'] if chain == 'PREROUTING' else 'new'}},
+            {'match': {'op': '!=', 'left': {'&': [{source: {'key': 'mark'}}, 0xff0000]}, 'right': 0}},
+            {'mangle': {'key': {target: {'key': 'mark'}}, 'value': {'&': [{source: {'key': 'mark'}}, 0xff0000]}}}]
 
 
 def inspect(value):
@@ -123,7 +181,9 @@ def inspect(value):
         result = command(['nft', '-j', 'list', 'tables'])
         if result.returncode:
             blockers.append('Unable to inspect the current firewall')
-        elif any(item['table']['name'] not in ('home_gateway_base', 'home_gateway_proxy')
+        elif any((item['table'].get('family'), item['table']['name']) not in (
+                    ('inet', 'home_gateway_base'), ('inet', 'home_gateway_proxy')) and not managed_tailscale_table(
+                        item['table'].get('family'), item['table']['name'])
                  for item in json.loads(result.stdout).get('nftables', []) if 'table' in item):
             blockers.append('Unmanaged firewall tables exist; automatic initialization is limited to a dedicated target')
     else:

@@ -19,6 +19,7 @@ def healthy_status():
             'components': {'vpn': {'state': 'running', 'attempts': 2, 'max_attempts': 4, 'retry_in_seconds': None}}},
             'supervisor_status_fresh': True, 'proxy_routing': {'ready': True},
             'proxy_rules_present': True, 'base_rules_present': True, 'forwarding_enabled': True,
+            'source_validation': {'ready': True},
             'dns_policy': {'vpn_dns_active': True, 'error': None}, 'subscription': {}}
 
 
@@ -35,7 +36,9 @@ class DiagnosticsTests(unittest.TestCase):
             read_text = pathlib.Path.read_text
 
             def read(path, *args, **kwargs):
-                return '1\n' if str(path) == '/proc/sys/net/ipv4/ip_forward' else read_text(path, *args, **kwargs)
+                if str(path) == '/proc/sys/net/ipv4/ip_forward':
+                    return '1\n'
+                return '0\n' if str(path).endswith('/src_valid_mark') else read_text(path, *args, **kwargs)
 
             with patch.object(diagnostics, 'DATA', root), patch.object(diagnostics, 'load_config', return_value=config), \
                  patch.object(diagnostics, 'proxy_routing_status', return_value={'ready': True}), \
@@ -53,7 +56,9 @@ class DiagnosticsTests(unittest.TestCase):
                  ('DNS', {'dns_policy': {'vpn_dns_active': False}}),
                  ('supervisor', {'supervisor_status_fresh': False}),
                  ('base', {'base_rules_present': False}),
-                 ('proxy', {'controller': {'transparent_proxy': True, 'components': {'clash': {}}}, 'proxy_routing': {'ready': False}})]
+                 ('proxy', {'controller': {'transparent_proxy': True, 'components': {'clash': {}}}, 'proxy_routing': {'ready': False}}),
+                 ('source-validation', {'controller': {'transparent_proxy': True, 'components': {'clash': {}}},
+                                        'source_validation': {'ready': False}})]
         for name, overrides in cases:
             with self.subTest(name=name), patch.object(diagnostics, 'status', return_value={**healthy_status(), **overrides}), \
                  patch('sys.stdout', io.StringIO()):
@@ -98,6 +103,7 @@ class DiagnosticsTests(unittest.TestCase):
             commands = {'id': '#!/bin/sh\nprintf "0\\n"\n',
                         'docker': '#!/bin/sh\nif [ "$1" = inspect ]; then printf "%s\\n" "$FAKE_CONTAINER"; else printf "%s\\n" "$@"; fi\n',
                         'systemctl': '#!/bin/sh\nprintf "service states\\n"\n',
+                        'tailscale': '#!/bin/sh\nprintf "%s\\n" "$@"\n',
                         'journalctl': '#!/bin/sh\nprintf "journal output\\n"\n'}
             for name, body in commands.items():
                 path = root / name
@@ -108,6 +114,11 @@ class DiagnosticsTests(unittest.TestCase):
             self.assertEqual(offline.returncode, 1)
             self.assertIn('container is not running', offline.stderr)
             self.assertIn('service states', offline.stdout)
+            for action, expected in [('tailscale-status', 'status'), ('tailscale-netcheck', 'netcheck')]:
+                result = subprocess.run(['sh', str(ROOT / 'gatewayctl.sh'), action, '--json'],
+                                        env=environment, capture_output=True, text=True)
+                self.assertEqual(result.returncode, 0)
+                self.assertEqual(result.stdout.splitlines(), [expected, '--json'])
             environment['FAKE_CONTAINER'] = 'true'
             online = subprocess.run(['sh', str(ROOT / 'gatewayctl.sh'), 'status', '--json'], env=environment, capture_output=True, text=True)
             self.assertEqual(online.returncode, 0)

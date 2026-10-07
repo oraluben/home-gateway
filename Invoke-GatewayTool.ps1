@@ -1,6 +1,6 @@
 [CmdletBinding()]
 param(
-    [Parameter(Mandatory)][ValidateSet('gateway.py','deploy.py','prepare-host.py')][string]$Tool,
+    [Parameter(Mandatory)][ValidateSet('gateway.py','deploy.py','prepare-host.py','tailscale.py')][string]$Tool,
     [string[]]$ToolArguments = @(),
     [string]$DeploymentPath = (Join-Path $env:USERPROFILE '.config\home-gateway\deployment.json')
 )

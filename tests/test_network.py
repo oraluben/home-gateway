@@ -10,15 +10,23 @@ from unittest.mock import patch
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[1] / 'image'))
 import network
 
-RULE = {'priority': 17001, 'src': 'all', 'fwmark': '0x17001', 'table': '17001'}
+RULE = {'priority': 17001, 'src': 'all', 'fwmark': '0x7001', 'table': '17001'}
 ROUTE = {'type': 'local', 'dst': 'default', 'dev': 'lo', 'table': 17001, 'scope': 'host'}
 READ_RULES = ['ip', '-j', '-4', 'rule', 'show']
 READ_ROUTES = ['ip', '-j', '-4', 'route', 'show', 'table', 'all']
-ADD_RULE = ['ip', '-4', 'rule', 'add', 'priority', '17001', 'fwmark', '0x17001', 'lookup', '17001']
+ADD_RULE = ['ip', '-4', 'rule', 'add', 'priority', '17001', 'fwmark', '0x7001', 'lookup', '17001']
 ADD_ROUTE = ['ip', '-4', 'route', 'replace', 'local', '0.0.0.0/0', 'dev', 'lo', 'table', '17001']
 
 
 class ProxyRoutingTests(unittest.TestCase):
+    def test_proxy_mark_and_cleanup_do_not_touch_tailscale_reserved_bits(self):
+        self.assertEqual(int(network.MARK, 0) & 0xff0000, 0)
+        with patch.object(network, 'run') as run:
+            network.proxy_off()
+        for mark in (network.MARK, '0x17001'):
+            run.assert_any_call(['ip', '-4', 'rule', 'del', 'priority', '17001', 'fwmark', mark,
+                                 'lookup', '17001'], check=False)
+
     def inspect(self, rules=None, routes=None, repair=False):
         values = {tuple(READ_RULES): [copy.deepcopy(RULE)] if rules is None else rules,
                   tuple(READ_ROUTES): [copy.deepcopy(ROUTE)] if routes is None else routes}

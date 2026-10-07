@@ -25,6 +25,7 @@ Wi-Fi 路由器的 WAN 网关和 DNS 指向 Ubuntu 网关。使用 Hyper-V 时�
 - 配置只读挂载，镜像不含个人配置；部署先验证，再切换，已有部署失败时回退。
 - GPG 加密状态备份，恢复订阅缓存、地区数据库和节点选择。
 - 部署时同步管理端公钥文件；Hyper-V 首次创建也使用同一授权列表。
+- 可选 Tailscale 远程管理；Linux 服务独立于容器，Windows 可提供独立修复入口，默认不改变 DNS 或上网路由。见 [远程管理说明](docs/tailscale.md)。
 
 ## 内容放在哪里
 
@@ -38,6 +39,8 @@ Wi-Fi 路由器的 WAN 网关和 DNS 指向 Ubuntu 网关。使用 Hyper-V 时�
 | 渲染后的配置和密码 | 网关 `/opt/home-gateway/config` | 不进入公开仓库 |
 | 订阅缓存、数据库、面板选择、日志 | 网关 `/opt/home-gateway/data` | 加密备份；日志不备份 |
 | SSH/GPG 私钥、VM 磁盘、离线镜像 | 操作机独立存储 | 不进入 Git |
+| Tailscale 安装与兼容逻辑、固定版本 | 本仓库 `hosts/`、管理工具 | 公开 |
+| Tailscale 设备身份、账号与到期策略 | 各主机本地状态与 Tailscale 管理台 | 不进入 Git；重建时重新登录 |
 
 网关不需要安装 yadm、pass、个人 shell 配置或 GPG 私钥。管理端只需相关的加密条目与 SSH/GPG 密钥，无需整个私有 yadm checkout，也无需 `home-gateway` class。部署时解密必要数据，通过 SSH 发送最小运行配置；之后网关可以独立重启。平台参数不会进入容器。
 

@@ -124,6 +124,46 @@ class HostTests(unittest.TestCase):
         run.assert_not_called()
         write.assert_not_called()
 
+    def test_tailscale_tables_require_a_managed_service_and_safe_hooks(self):
+        receipt = json.dumps({'schema': 1, 'firewall': 'nftables', 'version': '1.102.5'})
+        entries = [{'chain': {'name': 'INPUT', 'hook': 'input', 'prio': 0, 'policy': 'accept'}},
+                   {'chain': {'name': 'ts-input'}},
+                   {'rule': {'chain': 'INPUT', 'expr': [{'counter': {'packets': 20, 'bytes': 1000}},
+                                                       {'jump': {'target': 'ts-input'}}]}}]
+        commands = {('nft', '-j', 'list', 'tables'): (0, json.dumps({'nftables': [
+                        {'table': {'family': 'ip', 'name': 'filter'}}]})),
+                    ('nft', '-j', 'list', 'table', 'ip', 'filter'): (0, json.dumps({'nftables': entries})),
+                    ('systemctl', 'show', '-p', 'Environment', '--value', 'tailscaled'):
+                        (0, 'TS_DEBUG_FIREWALL_MODE=nftables')}
+        files = {str(host.TAILSCALE_RECEIPT): receipt}
+        self.assertTrue(self.check(overrides=files, command_overrides=commands)['ready'])
+        self.assertFalse(self.check(command_overrides=commands)['ready'])
+        for foreign in ({'chain': {'name': 'other-manager'}},
+                        {'rule': {'chain': 'INPUT', 'expr': [{'drop': None}]}},
+                        {'chain': {'name': 'ts-input', 'hook': 'input', 'prio': -200, 'policy': 'drop'}},
+                        {'set': {'name': 'foreign'}}):
+            with self.subTest(foreign=foreign):
+                changed = {**commands, ('nft', '-j', 'list', 'table', 'ip', 'filter'):
+                           (0, json.dumps({'nftables': entries + [foreign]}))}
+                self.assertFalse(self.check(overrides=files, command_overrides=changed)['ready'])
+        changed = {**commands, ('systemctl', 'show', '-p', 'Environment', '--value', 'tailscaled'): (0, '')}
+        self.assertFalse(self.check(overrides=files, command_overrides=changed)['ready'])
+
+    def test_tailscale_connmark_tables_do_not_allow_unrelated_packet_marks(self):
+        entries = [{'chain': {'name': 'PREROUTING', 'hook': 'prerouting', 'prio': -150, 'policy': 'accept'}},
+                   {'chain': {'name': 'OUTPUT', 'hook': 'output', 'prio': -150, 'policy': 'accept'}},
+                   {'rule': {'chain': 'PREROUTING', 'expr': host.tailscale_connmark_rule('PREROUTING')}},
+                   {'rule': {'chain': 'OUTPUT', 'expr': host.tailscale_connmark_rule('OUTPUT')}}]
+        files = {str(host.TAILSCALE_RECEIPT): '{"schema":1,"firewall":"nftables"}'}
+        commands = {('nft', '-j', 'list', 'tables'): (0, '{"nftables":[{"table":{"family":"ip","name":"mangle"}}]}'),
+                    ('nft', '-j', 'list', 'table', 'ip', 'mangle'): (0, json.dumps({'nftables': entries})),
+                    ('systemctl', 'show', '-p', 'Environment', '--value', 'tailscaled'):
+                        (0, 'TS_DEBUG_FIREWALL_MODE=nftables')}
+        self.assertTrue(self.check(overrides=files, command_overrides=commands)['ready'])
+        entries[-1]['rule']['expr'][-1]['mangle']['value'] = 42
+        commands[('nft', '-j', 'list', 'table', 'ip', 'mangle')] = (0, json.dumps({'nftables': entries}))
+        self.assertFalse(self.check(overrides=files, command_overrides=commands)['ready'])
+
     def test_invalid_interface_is_rejected_before_any_host_command(self):
         with patch.object(host, 'command') as execute, self.assertRaises(ValueError):
             host.inspect({**INPUT, 'interface': 'eth0;reboot'})

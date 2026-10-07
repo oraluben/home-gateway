@@ -6,7 +6,8 @@ import re
 import subprocess
 
 from runtime import DATA
-MARK = '0x17001'
+# Leave Tailscale's reserved bits 16:23 clear, including its connmark rules.
+MARK = '0x7001'
 TABLE = '17001'
 RULE_PRIORITY = '17001'
 
@@ -92,8 +93,10 @@ def apply_base(config, policy):
 
 def proxy_off():
     run(['nft', 'delete', 'table', 'inet', 'home_gateway_proxy'], check=False)
-    run(['ip', '-4', 'rule', 'del', 'priority', RULE_PRIORITY, 'fwmark', MARK,
-         'lookup', TABLE], check=False)
+    for mark in (MARK, '0x17001'):
+        # Also remove the exact owned rule from releases before v0.6.1.
+        run(['ip', '-4', 'rule', 'del', 'priority', RULE_PRIORITY, 'fwmark', mark,
+             'lookup', TABLE], check=False)
     run(['ip', '-4', 'route', 'flush', 'table', TABLE], check=False)
 
 
@@ -153,13 +156,13 @@ def proxy_on(config, policy):
   set clients {{ type ipv4_addr; flags interval; auto-merge; elements = {{ {clients} }}; }}
   set corporate {{ type ipv4_addr; flags interval; auto-merge; {corporate_elements} }}
   chain divert {{
-    type filter hook prerouting priority mangle; policy accept;
+    type filter hook prerouting priority -140; policy accept;
     iifname "{lan}" ip saddr @clients jump proxy
   }}
   chain proxy {{
     fib daddr type local return
     ip daddr @corporate return
-    ip daddr {{ 0.0.0.0/8, 10.0.0.0/8, 127.0.0.0/8, 169.254.0.0/16, 172.16.0.0/12, 192.168.0.0/16, 224.0.0.0/4, 240.0.0.0/4 }} return
+    ip daddr {{ 0.0.0.0/8, 10.0.0.0/8, 100.64.0.0/10, 127.0.0.0/8, 169.254.0.0/16, 172.16.0.0/12, 192.168.0.0/16, 224.0.0.0/4, 240.0.0.0/4 }} return
     meta l4proto {{ tcp, udp }} th dport 53 return
     meta l4proto {{ tcp, udp }} counter tproxy ip to 127.0.0.1:7893 meta mark set {MARK} accept
   }}

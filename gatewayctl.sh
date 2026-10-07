@@ -8,6 +8,17 @@ if [ "$#" -eq 0 ]; then
     set -- status
 fi
 case "$1" in
+    tailscale-status)
+        shift
+        exec tailscale status "$@"
+        ;;
+    tailscale-netcheck)
+        shift
+        exec tailscale netcheck "$@"
+        ;;
+    logs-tailscale)
+        exec journalctl -u tailscaled --no-pager -n 60
+        ;;
     logs-system)
         exec journalctl -u home-gateway -u home-gateway-dns --no-pager -n 60
         ;;
