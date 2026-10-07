@@ -50,17 +50,21 @@ def settings(value):
     return interface, address, gateway, (str(controller), int(port))
 
 
-def sysctls(interface):
+def sysctls(interface, tailscale_exit=False):
     # Slash separators also handle dotted VLAN interface names correctly.
-    return {'net/ipv4/ip_forward': '1', 'net/ipv4/conf/all/send_redirects': '0',
+    values = {'net/ipv4/ip_forward': '1', 'net/ipv4/conf/all/send_redirects': '0',
             'net/ipv4/conf/default/send_redirects': '0', f'net/ipv4/conf/{interface}/send_redirects': '0',
             'net/ipv4/conf/all/rp_filter': '0', 'net/ipv4/conf/default/rp_filter': '0',
             f'net/ipv4/conf/{interface}/rp_filter': '0', 'net/ipv4/conf/all/src_valid_mark': '0',
             'net/ipv4/conf/default/src_valid_mark': '0', f'net/ipv4/conf/{interface}/src_valid_mark': '0'}
+    if tailscale_exit:
+        # Enable routing before the nftables IPv6 rejection, preserving upstream RA.
+        values.update({'net/ipv6/conf/all/forwarding': '1', f'net/ipv6/conf/{interface}/accept_ra': '2'})
+    return values
 
 
-def sysctl_text(interface):
-    return ''.join(key + '=' + value + '\n' for key, value in sysctls(interface).items())
+def sysctl_text(interface, tailscale_exit=False):
+    return ''.join(key + '=' + value + '\n' for key, value in sysctls(interface, tailscale_exit).items())
 
 
 def docker_settings(existing):
@@ -214,9 +218,14 @@ def inspect(value):
         blockers.append('Enable systemd-resolved before preparing the gateway')
     if not pathlib.Path('/dev/net/tun').exists():
         changes.append('Load the TUN kernel module')
-    if read(SYSCTL) != sysctl_text(interface):
+    tailscale_exit = value.get('tailscale_exit', False)
+    if not isinstance(tailscale_exit, bool):
+        blockers.append('tailscale_exit must be a boolean')
+    if tailscale_exit and not TAILSCALE_RECEIPT.exists():
+        blockers.append('Install project-managed Tailscale before preparing an exit node')
+    if read(SYSCTL) != sysctl_text(interface, tailscale_exit):
         changes.append('Write gateway forwarding settings for ' + interface)
-    if any(read('/proc/sys/' + key).strip() != expected for key, expected in sysctls(interface).items()):
+    if any(read('/proc/sys/' + key).strip() != expected for key, expected in sysctls(interface, tailscale_exit).items()):
         changes.append('Apply gateway forwarding settings')
     return {'supported': not blockers, 'ready': not blockers and not changes,
             'blockers': sorted(set(blockers)), 'changes': changes}
@@ -289,8 +298,8 @@ def apply(value):
         if docker_present:
             run(['systemctl', 'restart', 'docker'])
     run(['modprobe', 'tun'])
-    if read(SYSCTL) != sysctl_text(interface):
-        write_owned(SYSCTL, sysctl_text(interface))
+    if read(SYSCTL) != sysctl_text(interface, value.get('tailscale_exit', False)):
+        write_owned(SYSCTL, sysctl_text(interface, value.get('tailscale_exit', False)))
     # Apply only this project's keys; do not reapply all host sysctl files.
     run(['sysctl', '-p', str(SYSCTL)])
     return inspect(value)

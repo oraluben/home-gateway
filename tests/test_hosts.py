@@ -24,6 +24,13 @@ INPUT = {'interface': 'enp1s0', 'network': {'address': '192.168.50.201/24', 'gat
 
 
 class HostTests(unittest.TestCase):
+    def test_exit_forwarding_preserves_router_advertisements_and_low_source_marks(self):
+        values = host.sysctls('enp1s0', True)
+        self.assertEqual(values['net/ipv6/conf/all/forwarding'], '1')
+        self.assertEqual(values['net/ipv6/conf/enp1s0/accept_ra'], '2')
+        self.assertEqual(values['net/ipv4/conf/all/src_valid_mark'], '0')
+        self.assertNotIn('net/ipv6/conf/all/forwarding', host.sysctls('enp1s0'))
+
     def fixtures(self, overrides=None, command_overrides=None):
         files = {'/etc/os-release': 'ID=ubuntu\nVERSION_ID="24.04"\n', '/proc/1/comm': 'systemd\n',
                  '/proc/sys/kernel/osrelease': '6.8.0-generic', str(host.DAEMON): json.dumps(host.docker_settings({})),

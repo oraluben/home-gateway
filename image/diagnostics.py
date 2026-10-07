@@ -10,7 +10,7 @@ import sys
 import time
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
-from network import proxy_routing_status
+from network import proxy_routing_status, tailscale_exit_enabled, TAILSCALE_INTERFACE
 from runtime import DATA, load_config
 
 ACTIONS = ('status', 'check', 'logs-vpn', 'logs-clash', 'retry-vpn', 'retry-clash', 'stop-vpn', 'stop-clash')
@@ -34,14 +34,23 @@ def status():
     age = round(time.time() - path.stat().st_mtime, 1) if path.exists() else None
     routing = proxy_routing_status()
     forwarding = pathlib.Path('/proc/sys/net/ipv4/ip_forward').read_text().strip() == '1'
-    source_marks = {interface: int(pathlib.Path('/proc/sys/net/ipv4/conf/' + interface + '/src_valid_mark').read_text())
-                    for interface in ('all', config['network']['interface'])}
-    source_validation = {'ready': not any(source_marks.values()), 'src_valid_mark': source_marks}
+    interfaces = ['all', config['network']['interface']]
+    remote_exit = tailscale_exit_enabled(config)
+    if remote_exit:
+        interfaces.append(TAILSCALE_INTERFACE)
+    source_marks = {}
+    for interface in interfaces:
+        path = pathlib.Path('/proc/sys/net/ipv4/conf/' + interface + '/src_valid_mark')
+        source_marks[interface] = int(path.read_text()) if path.exists() else None
+    source_validation = {'ready': all(value == 0 for value in source_marks.values()), 'src_valid_mark': source_marks}
     proxy_rules = command(['nft', 'list', 'table', 'inet', 'home_gateway_proxy']).returncode == 0
     base_rules = command(['nft', 'list', 'table', 'inet', 'home_gateway_base']).returncode == 0
     receipt = read_json('deployment.json') or {}
     addresses = command(['ip', '-j', '-4', 'address', 'show', 'dev', config['network']['interface']])
     subscription = read_json('subscription-status.json') or {}
+    route_policy = read_json('tailscale-policy-status.json') if remote_exit else None
+    route_path = DATA / 'tailscale-policy-status.json'
+    route_age = round(time.time() - route_path.stat().st_mtime, 1) if remote_exit and route_path.exists() else None
     # Subscription URLs, configuration, passwords and controller keys are never returned.
     return {'version': receipt.get('version'), 'container': 'running',
             'addresses': json.loads(addresses.stdout) if addresses.returncode == 0 else [],
@@ -50,6 +59,10 @@ def status():
             'proxy_routing': routing, 'proxy_rules_present': proxy_rules,
             'base_rules_present': base_rules, 'forwarding_enabled': forwarding,
             'source_validation': source_validation,
+            'tailscale_exit': {'configured': remote_exit, 'ipv4_only': True,
+                              'interface_present': pathlib.Path('/sys/class/net/' + TAILSCALE_INTERFACE).exists(),
+                              'route_policy': route_policy, 'route_policy_age_seconds': route_age,
+                              'route_policy_fresh': route_age is not None and -5 <= route_age < 20},
             'dns_policy': read_json('dns-status.json'),
             'subscription': {key: subscription[key] for key in ('state', 'last_attempt', 'last_success', 'error', 'nodes', 'groups', 'rules') if key in subscription}}
 
@@ -75,6 +88,11 @@ def print_status(value):
     if not value['source_validation']['ready']:
         print('Source validation: src_valid_mark conflicts with transparent routing; inspect host services')
     print('Base forwarding: ' + ('ready' if value['forwarding_enabled'] and value['base_rules_present'] else 'incomplete'))
+    if value.get('tailscale_exit', {}).get('configured'):
+        print('Tailscale ingress: IPv4 enabled; IPv6 rejected; use tailscale-status to check advertisement/approval')
+        policy = value['tailscale_exit'].get('route_policy') or {}
+        print(f'Tailscale VPN routes: {policy.get("state", "missing")}; {policy.get("prefix_count", 0)} prefixes; '
+              + ('fresh' if value['tailscale_exit'].get('route_policy_fresh') else 'stale'))
     dns = value.get('dns_policy') or {}
     print('Corporate DNS: ' + ('active' if dns.get('vpn_dns_active') else 'inactive')
           + (f'; error: {dns["error"]}' if dns.get('error') else ''))
@@ -136,6 +154,10 @@ def main(argv=None):
         if 'vpn' in controller.get('components', {}) and not controller.get('vpn_connected'):
             return 1
         dns = value.get('dns_policy') or {}
+        exit_config = value.get('tailscale_exit') or {}
+        if exit_config.get('configured') and (not exit_config.get('route_policy_fresh')
+                or (exit_config.get('route_policy') or {}).get('state') != 'ready'):
+            return 1
         if controller.get('vpn_connected') and (not dns.get('vpn_dns_active') or dns.get('error')):
             return 1
         if 'clash' in controller.get('components', {}) and not (controller.get('transparent_proxy') and value['proxy_routing']['ready'] and value['proxy_rules_present'] and value['source_validation']['ready']):

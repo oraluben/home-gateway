@@ -19,6 +19,13 @@ case "$1" in
     logs-tailscale)
         exec journalctl -u tailscaled --no-pager -n 60
         ;;
+    logs-tailscale-policy)
+        exec journalctl -u home-gateway-tailscale-policy --no-pager -n 60
+        ;;
+    retry-tailscale-policy)
+        systemctl reset-failed home-gateway-tailscale-policy
+        exec systemctl restart home-gateway-tailscale-policy
+        ;;
     logs-system)
         exec journalctl -u home-gateway -u home-gateway-dns --no-pager -n 60
         ;;

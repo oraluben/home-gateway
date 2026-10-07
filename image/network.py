@@ -10,6 +10,15 @@ from runtime import DATA
 MARK = '0x7001'
 TABLE = '17001'
 RULE_PRIORITY = '17001'
+TAILSCALE_INTERFACE = 'tailscale0'
+TAILSCALE_CLIENTS = '100.64.0.0/10'
+
+
+def tailscale_exit_enabled(config):
+    value = config['network'].get('tailscale_exit', False)
+    if not isinstance(value, bool):
+        raise ValueError('network.tailscale_exit must be a boolean')
+    return value
 
 
 def run(args, check=True, input=None):
@@ -69,6 +78,13 @@ def apply_base(config, policy):
                                             [x + '/32' for x in policy.get('dns', [])]))
     corporate_elements = f'elements = {{ {corporate} }};' if corporate else ''
     controller_address, controller_port = controller_listener(config)
+    remote_guard = remote_nat = ipv6_guard = ''
+    if tailscale_exit_enabled(config):
+        remote_guard = f'    iifname "{TAILSCALE_INTERFACE}" ip saddr {TAILSCALE_CLIENTS} ip daddr @corporate oifname != "{vpn}" counter reject with icmp type admin-prohibited\n'
+        remote_nat = f'    iifname "{TAILSCALE_INTERFACE}" ip saddr {TAILSCALE_CLIENTS} oifname {{ "{lan}", "{vpn}" }} counter masquerade\n'
+        # The appliance currently supports IPv4 only. Reject immediately so dual
+        # stack clients can fall back; never send IPv6 around Mihomo/corporate policy.
+        ipv6_guard = f'    iifname "{TAILSCALE_INTERFACE}" meta nfproto ipv6 counter reject with icmpv6 type no-route\n'
     controller_guard = '' if ipaddress.IPv4Address(controller_address).is_loopback else f'''
   chain controller_guard {{
     type filter hook input priority -5; policy accept;
@@ -83,10 +99,12 @@ def apply_base(config, policy):
   chain forward_guard {{
     type filter hook forward priority -5; policy accept;
     ip saddr @clients ip daddr @corporate oifname != "{vpn}" counter reject with icmp type admin-prohibited
+{remote_guard}{ipv6_guard}\
   }}
   chain source_nat {{
     type nat hook postrouting priority srcnat; policy accept;
     ip saddr @clients oifname {{ "{lan}", "{vpn}" }} counter masquerade
+{remote_nat}\
   }}
 }}\n''')
 
@@ -151,6 +169,8 @@ def proxy_on(config, policy):
     corporate = ', '.join(validated_networks(policy.get('prefixes', []) +
                                             [x + '/32' for x in policy.get('dns', [])]))
     corporate_elements = f'elements = {{ {corporate} }};' if corporate else ''
+    remote_divert = (f'    iifname "{TAILSCALE_INTERFACE}" ip saddr {TAILSCALE_CLIENTS} counter jump proxy\n'
+                     if tailscale_exit_enabled(config) else '')
     ensure_proxy_routing()
     replace_table('home_gateway_proxy', f'''table inet home_gateway_proxy {{
   set clients {{ type ipv4_addr; flags interval; auto-merge; elements = {{ {clients} }}; }}
@@ -158,6 +178,7 @@ def proxy_on(config, policy):
   chain divert {{
     type filter hook prerouting priority -140; policy accept;
     iifname "{lan}" ip saddr @clients jump proxy
+{remote_divert}\
   }}
   chain proxy {{
     fib daddr type local return

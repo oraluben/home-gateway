@@ -25,7 +25,7 @@ Wi-Fi 路由器的 WAN 网关和 DNS 指向 Ubuntu 网关。使用 Hyper-V 时�
 - 配置只读挂载，镜像不含个人配置；部署先验证，再切换，已有部署失败时回退。
 - GPG 加密状态备份，恢复订阅缓存、地区数据库和节点选择。
 - 部署时同步管理端公钥文件；Hyper-V 首次创建也使用同一授权列表。
-- 可选 Tailscale 远程管理；Linux 服务独立于容器，Windows 可提供独立修复入口，默认不改变 DNS 或上网路由。见 [远程管理说明](docs/tailscale.md)。
+- 可选 Tailscale 远程管理与 IPv4 退出节点；Linux 服务独立于容器，Windows 可提供独立修复入口。远程流量可以复用同一公司 VPN、DNS 和 Clash 分流，默认关闭出口功能。见 [Tailscale 说明](docs/tailscale.md)。
 
 ## 内容放在哪里
 

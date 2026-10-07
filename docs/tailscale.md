@@ -1,8 +1,8 @@
-# Tailscale 远程管理
+# Tailscale 远程管理与退出节点
 
 第一阶段提供网关 SSH、面板隧道，以及 Windows 独立远程桌面入口。Tailscale 是 Linux 主机上的可选 systemd 服务，与 Docker 容器独立；Hyper-V 和原生 Linux 使用同一安装器。Windows 另装一个客户端，虚拟机或网关容器故障时仍有修复入口。Windows 关机、断电或家庭宽带故障仍会同时中断这两个入口。
 
-当前不发布公司网段、不提供退出节点，也不接受其他节点的路由或 DNS。手机和 Mac 仍使用原有网络；安装 Tailscale 后登录同一个个人账号，才会加入远程管理网络。
+默认只提供管理，不发布公司网段、不提供退出节点，也不接受其他节点的路由或 DNS。v0.7.1 起可显式启用 IPv4 出口适配；客户端选择退出节点后才会复用公司 VPN 与 Clash。安装并登录本身不会代理手机上网。
 
 ## 安装和登录
 
@@ -54,6 +54,17 @@ ssh -N -L 127.0.0.1:19090:<网关局域网-IP>:9090 gateway@<网关-Tailscale-IP
 
 Windows 远程桌面连接它自己的 Tailscale IP；前提是 Windows 已启用远程桌面，防火墙允许该接口的 RDP。安装器不额外开放远程桌面或改账户权限。初次接入时核验这两个条件。
 
+手机无 SSH 客户端时，可用 Tailscale Serve 作为仅 tailnet 可见的面板入口：
+
+```sh
+sudo tailscale serve --bg --http=9090 http://<网关局域网-IP>:9090
+sudo tailscale serve status
+# 使用输出的 MagicDNS 主机名打开 /ui/；API 仍需原密钥。
+# 关闭此入口：sudo tailscale serve --http=9090 off
+```
+
+此命令已在固定版本 1.102.5 验证局域网后端。Serve 不把端口开放给公网，不启用 Funnel；状态由 Tailscale 自己持久保存，重新登录/重建后按需恢复。用 IP 访问 HTTP Serve 可能返回 404，应使用命令输出的主机名。来源：[Serve CLI](https://tailscale.com/docs/reference/tailscale-cli/serve)。
+
 固定设备需要在 Tailscale 管理台检查 node key 的到期策略。到期后可能需要重新授权；它不会影响本地 Wi-Fi 上网。设备身份分别保存在 Linux `/var/lib/tailscale` 和 Windows `%ProgramData%\Tailscale`，属于私有运行状态，不进 Git、镜像或网关配置备份。重建后重新登录并删除旧设备，不复制同一个身份给两台机器。交互登录不需要向 pass 增加凭据，也不需要给网关安装私有 yadm。
 
 ## 与透明代理共存
@@ -82,8 +93,28 @@ Tailscale 1.98+ 的 netfilter 设置会把全局 `src_valid_mark` 改为 1，使
 
 终端卡顿还需在同一客户端对比实际 WSS 响应、TCP 重传和延迟分布；一个平均 ping 或一次成功打开网页不足以判断稳定性。外出复用代理/公司 VPN 的验收，要在退出节点适配完成后再做。
 
-## 下一阶段
+## 启用退出节点
+
+启用分三层，任一层缺失都不能把“已连接”当成出口可用：
+
+1. 在 pass 部署条目的 `runtime.network` 增加 `"tailscale_exit": true`。先运行 `tools/prepare-host.py --apply`，再按常规验证和部署；Windows 对应 `Prepare-Host.ps1 -Apply`、`Deploy-Gateway.ps1 -ValidateOnly` 与 `Deploy-Gateway.ps1`。
+2. `python3 tools/tailscale.py exit-on`（Windows：`./Tailscale-Gateway.ps1 exit-on`）。工具先检查镜像出口适配与网关连通性，再发布默认路由。
+3. 在 Tailscale 管理台 home-gateway 的 Edit route settings 中启用 Use as exit node。然后手机/Mac 的 Exit node 选择 home-gateway，接受 Tailscale DNS。仍选“无”时，只能访问管理网络；Google 和公司业务流量不经过家里。
+
+IPv4 公司目的地址绕过透明代理、走 OpenConnect；VPN 断线后保留已知网段的拒绝规则。其余 IPv4 TCP/UDP 经过原有 Clash 订阅分流，Tailnet/私网/本机服务与 DNS 流量排除。使用退出节点时，Tailscale 原生 DNS 代理使用出口节点的解析配置，需从真正远端验证公司域名；客户端手工指定其他 DNS或浏览器自带 DoH 会影响结果。来源：[退出节点说明](https://tailscale.com/docs/features/exit-nodes)。
+
+退出节点自身的接收过滤器会从默认路由中排除 RFC1918 私网，所以仅发布 `0.0.0.0/0` 不足以访问公司 `10.x` 地址。可选主机服务 `home-gateway-tailscale-policy` 将 VPN 实际下发的网段和 DNS 地址同步到本机 Tailscale 的非默认发布列表；策略计算位于镜像源码，主机适配只使用本机 Tailscale CLI。切换 VPN profile 自动替换列表；断线继续声明缓存网段，流量由网关拒绝。最多四次发布尝试，失败间隔 15/30/60 秒，持续失败停止写入，可用 `gatewayctl retry-tailscale-policy` 重试，日志使用 `gatewayctl logs-tailscale-policy`。该服务不重连 VPN，也不修改系统 DNS。来源：[固定版本上游过滤实现](https://github.com/tailscale/tailscale/blob/v1.102.5/ipn/ipnlocal/local.go)。
+
+在默认个人 tailnet 的访问策略下，选择已批准的退出节点即可使用这些声明，无需批准每条公司网段；本方案已用手机移动网络验证。管理台可能显示公司网段“等待批准”，它们目前用来补全出口的接收过滤器。若批准网段并让客户端接受路由，将额外开启不选退出节点也访问这些网段的分流模式；当前不依赖这条路径。自定义 grants/ACL 时需确认明确允许所需公司目的地址。VPN 下发默认路由或与 `100.64.0.0/10` 重叠时，本镜像拒绝应用该 VPN 策略。
+
+本镜像当前只支持 IPv4 出口。IPv6 转发开启用于让远端收到明确的 ICMPv6 no-route；从 tailscale0 转发的 IPv6 被拒绝，不走公网直连，双栈应用可回退到 IPv4，只有 IPv6 的服务不能使用此出口。访问网关本身的 Tailscale IPv6 地址属于本地输入，SSH 不受转发拒绝影响。启用 IPv6 转发时保留上游路由通告接收。
+
+紧急撤销发布可以运行 `python3 tools/tailscale.py exit-off`，无需容器工作或解密 pass；管理连接仍保留。手机立即恢复普通移动上网时，将 Exit node 改回“无”。需要停用镜像适配时，在 pass 将 `tailscale_exit` 改为 false 并重新部署，先撤销发布。不会自动撤销服务端管理台的批准记录；每次启用前仍需重新验证路径。
+
+`gatewayctl status/check --json` 显示出口适配是否配置、接口是否存在、网段同步状态及实际源校验参数；`gatewayctl tailscale-status` 查看 Tailscale 状态。这些检查仍不能代替客户端的实际访问。验收至少覆盖移动网络下的国内、Google、公司网站、DNS、Clash 命中的分组，以及公司 VPN 停机后的断线保护。网关自身请求不会经过 tailscale0，不能代替该测试。
+
+## 链路质量与后续扩展
 
 先用手机移动网络或 Mac 外部网络验证管理访问，记录 direct/relay 路径、延迟和丢包。局域网直连成功不能代替外网验证；只走远距离 DERP 中继时，终端交互和退出节点体验可能较差。
 
-之后再给网关增加可选退出节点/网段发布适配，包括 tailscale0 入站的代理、公司网段断线保护、NAT、DNS、IPv6 和 MTU 验证。直接在当前版本开启 `--advertise-exit-node` 不会自动让远端流量获得局域网同样的 Clash 分流和内网 DNS。便携路由器作为 Tailscale 客户端，等该路径验证完成后再接入。
+便携路由器作为 Tailscale 客户端，等远端真实路径验证完成后再接入。只有公司/家庭网段的分流模式、完整 IPv6 代理与跨公网 MTU/吞吐验证仍需按使用需求扩展；当前不自动发布家庭 LAN 网段，不修改客户端与所处网络重叠的私网路由。

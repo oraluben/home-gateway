@@ -10,12 +10,30 @@ MANAGEMENT_UP = ('sudo tailscale up --accept-dns=false --accept-routes=false --s
                  '--hostname=home-gateway --timeout=20s --json')
 
 
+def advertise_exit(config, enabled):
+    if enabled:
+        value = json.loads(remote(config, 'sudo gatewayctl check --json', timeout=60))
+        if not value.get('tailscale_exit', {}).get('configured'):
+            raise ValueError('Deploy runtime.network.tailscale_exit=true before advertising the exit node')
+        state = json.loads(remote(config, 'sudo tailscale status --json'))
+        if state.get('BackendState') != 'Running':
+            raise ValueError('Log in to Tailscale before advertising the exit node')
+    command = 'sudo tailscale set --advertise-exit-node=' + ('true' if enabled else 'false --advertise-routes=')
+    remote(config, command)
+    print(json.dumps({'advertised': enabled,
+                      'next': 'Approve Use as exit node in the admin console, then select it on the client'
+                              if enabled else 'Remote management remains available'}))
+
+
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument('action', choices=('install', 'login', 'status', 'netcheck', 'logs'))
+    parser.add_argument('action', choices=('install', 'login', 'status', 'netcheck', 'logs', 'exit-on', 'exit-off'))
     parser.add_argument('--config')
     args = parser.parse_args()
     config = operator_deployment(args.config)
+    if args.action in ('exit-on', 'exit-off'):
+        advertise_exit(config, args.action == 'exit-on')
+        return 0
     if args.action == 'install':
         path = '/tmp/home-gateway-tailscale-' + uuid.uuid4().hex + '.py'
         remote(config, 'umask 077; cat > ' + path, (ROOT / 'hosts/linux/tailscale.py').read_bytes())
@@ -33,6 +51,10 @@ def main():
                (ROOT / 'gatewayctl.sh').read_bytes())
         return 0
     if args.action == 'login':
+        state = json.loads(remote(config, 'sudo tailscale status --json'))
+        if state.get('BackendState') == 'Running':
+            print(json.dumps({'BackendState': 'Running', 'settings_preserved': True}))
+            return 0
         result = subprocess.run(ssh_command(config) + [MANAGEMENT_UP], capture_output=True, text=True, timeout=45)
         # Up emits one or more JSON events. Keep the URL and state, omit embedded QR data.
         body = result.stdout.strip()

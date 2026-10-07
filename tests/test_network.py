@@ -103,5 +103,37 @@ class ProxyRoutingTests(unittest.TestCase):
                 network.proxy_routing_status()
 
 
+class RemoteIngressTests(unittest.TestCase):
+    def config(self, enabled=False):
+        return {'network': {'interface': 'eth0', 'clients': ['192.168.1.0/24'], 'tailscale_exit': enabled},
+                'vpn': {'interface': 'vpn0'},
+                'mihomo': {'external-controller': '192.168.1.201:9090', 'secret': 'test-key'}}
+
+    def rules(self, operation, enabled):
+        with patch.object(network, 'replace_table') as replace, patch.object(network, 'ensure_proxy_routing'):
+            operation(self.config(enabled), {'prefixes': ['10.2.0.0/16'], 'dns': ['10.2.1.1'], 'up': False})
+        return replace.call_args.args[1]
+
+    def test_remote_corporate_protection_survives_vpn_down_and_is_scoped_to_tailscale(self):
+        body = self.rules(network.apply_base, True)
+        self.assertIn('iifname "tailscale0" ip saddr 100.64.0.0/10 ip daddr @corporate oifname != "vpn0" counter reject', body)
+        self.assertIn('iifname "tailscale0" ip saddr 100.64.0.0/10 oifname { "eth0", "vpn0" } counter masquerade', body)
+        self.assertIn('iifname "tailscale0" meta nfproto ipv6 counter reject with icmpv6 type no-route', body)
+        self.assertNotIn('tailscale0', body.split('chain controller_guard')[1].split('chain forward_guard')[0])
+
+    def test_remote_proxy_capture_excludes_local_and_corporate_destinations_before_tproxy(self):
+        body = self.rules(network.proxy_on, True)
+        self.assertIn('iifname "tailscale0" ip saddr 100.64.0.0/10 counter jump proxy', body)
+        for exception in ('fib daddr type local return', 'ip daddr @corporate return', '100.64.0.0/10', 'th dport 53 return'):
+            self.assertLess(body.index(exception), body.index('tproxy ip'))
+        self.assertIn('iifname "eth0" ip saddr @clients jump proxy', body)
+
+    def test_remote_ingress_is_optional_and_rejects_string_boolean(self):
+        for operation in (network.apply_base, network.proxy_on):
+            self.assertNotIn('tailscale0', self.rules(operation, False))
+        with self.assertRaises(ValueError):
+            network.tailscale_exit_enabled(self.config('false'))
+
+
 if __name__ == '__main__':
     unittest.main()

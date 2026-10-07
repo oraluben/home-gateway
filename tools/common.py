@@ -141,7 +141,8 @@ def ssh_command(config):
 def host_inputs(config):
     """Only non-secret target settings are sent to the host initializer."""
     return {'network': config['network'], 'interface': config['runtime']['network']['interface'],
-            'controller': config['runtime']['mihomo']['external-controller']}
+            'controller': config['runtime']['mihomo']['external-controller'],
+            'tailscale_exit': config['runtime']['network'].get('tailscale_exit', False)}
 
 
 def remote(config, command, content=None, timeout=120):

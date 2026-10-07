@@ -1,11 +1,12 @@
 import copy
 import yaml
-from network import DATA, controller_listener
+from network import DATA, controller_listener, tailscale_exit_enabled
 
 SUBSCRIPTION_SECTIONS = ('proxies', 'proxy-groups', 'rules', 'proxy-providers', 'rule-providers')
 
 
 def render_mihomo(config, subscription=None):
+    tailscale_exit_enabled(config)
     mihomo = {}
     if config.get('subscription', {}).get('enabled', False):
         if subscription is None:

@@ -5,6 +5,8 @@ import re
 import subprocess
 import sys
 from network import DATA, read_policy, run, save_json
+from runtime import load_config
+from tailscale_policy import advertised_prefixes
 
 reason = os.environ.get('reason', '')
 interface = os.environ.get('TUNDEV', 'vpn0')
@@ -25,6 +27,8 @@ if reason in ('connect', 'reconnect'):
         prefixes.append(str(network))
     if not prefixes:
         raise RuntimeError('VPN supplied no IPv4 split routes; refusing an unexpected full tunnel')
+    if load_config()['network'].get('tailscale_exit', False):
+        advertised_prefixes({'prefixes': prefixes, 'dns': dns})
 # DNS is managed through the VM's systemd-resolved, not /etc/resolv.conf.
 for key in ('INTERNAL_IP4_DNS', 'INTERNAL_IP6_DNS', 'CISCO_DEF_DOMAIN', 'CISCO_SPLIT_DNS'):
     environment.pop(key, None)

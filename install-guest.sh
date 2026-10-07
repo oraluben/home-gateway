@@ -64,5 +64,28 @@ EOF
 systemctl daemon-reload
 systemctl enable --now home-gateway-base
 systemctl enable --now home-gateway-dns
+cat >/etc/systemd/system/home-gateway-tailscale-policy.service <<'EOF'
+[Unit]
+Description=Publish pushed VPN destinations for the Tailscale exit node
+After=tailscaled.service home-gateway-base.service
+Wants=tailscaled.service
+StartLimitIntervalSec=infinity
+StartLimitBurst=3
+[Service]
+ExecStart=/usr/bin/python3 /opt/home-gateway/tailscale-policy.py
+Restart=on-failure
+RestartSec=15
+[Install]
+WantedBy=multi-user.target
+EOF
+systemctl daemon-reload
+if python3 -c 'import yaml; c=yaml.safe_load(open("config/gateway.yaml")); raise SystemExit(0 if c["network"].get("tailscale_exit",False) else 1)'; then
+    # A first install has a unit file but no loaded unit state to reset yet.
+    systemctl reset-failed home-gateway-tailscale-policy 2>/dev/null || true
+    systemctl enable home-gateway-tailscale-policy
+    systemctl restart home-gateway-tailscale-policy
+else
+    systemctl disable --now home-gateway-tailscale-policy
+fi
 # Enable at boot, but start only after the image has been built and validated.
 systemctl enable home-gateway
