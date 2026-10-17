@@ -30,6 +30,7 @@ class HostTests(unittest.TestCase):
         self.assertEqual(values['net/ipv6/conf/enp1s0/accept_ra'], '2')
         self.assertEqual(values['net/ipv4/conf/all/src_valid_mark'], '0')
         self.assertNotIn('net/ipv6/conf/all/forwarding', host.sysctls('enp1s0'))
+        self.assertNotIn('net/ipv6/conf/enp1s0/accept_ra', host.sysctls('enp1s0', True, True))
 
     def fixtures(self, overrides=None, command_overrides=None):
         files = {'/etc/os-release': 'ID=ubuntu\nVERSION_ID="24.04"\n', '/proc/1/comm': 'systemd\n',
@@ -54,7 +55,7 @@ class HostTests(unittest.TestCase):
                 patch.object(host, 'command', side_effect=execute),
                 patch.object(host.shutil, 'which', side_effect=lambda name: '/usr/bin/' + name),
                 patch.object(host.pathlib.Path, 'exists', autospec=True,
-                             side_effect=lambda path: str(path) == '/dev/net/tun'))
+                             side_effect=lambda path: str(path) == '/dev/net/tun' or str(path) in files))
 
     def check(self, **kwargs):
         contexts = self.fixtures(**kwargs)
@@ -69,6 +70,50 @@ class HostTests(unittest.TestCase):
             self.assertTrue(host.apply(INPUT)['ready'])
             run.assert_not_called()
             write.assert_not_called()
+
+    def test_networkd_ra_accepts_kernel_ra_zero_and_detects_missing_persistence(self):
+        dropin = '/etc/systemd/network/10-netplan-uplink.network.d/90-home-gateway-uplink-ra.conf'
+        state = {'NetworkFile': '/run/systemd/network/10-netplan-uplink.network',
+                 'NetworkFileDropins': [dropin]}
+        files = {str(host.TAILSCALE_RECEIPT): '{"schema":1}', dropin: host.UPLINK_RA,
+                 str(host.SYSCTL): host.sysctl_text('enp1s0', True, True),
+                 '/proc/sys/net/ipv6/conf/all/forwarding': '1',
+                 '/proc/sys/net/ipv6/conf/enp1s0/accept_ra': '0'}
+        commands = {('networkctl', 'status', '--json=short', 'enp1s0'): (0, json.dumps(state))}
+        contexts = self.fixtures(files, commands)
+        with contexts[0], contexts[1], contexts[2], contexts[3], patch.object(host, 'run') as execute:
+            self.assertTrue(host.inspect({**INPUT, 'tailscale_exit': True})['ready'])
+            self.assertTrue(host.apply({**INPUT, 'tailscale_exit': True})['ready'])
+            execute.assert_not_called()
+        files[dropin] = '[Network]\nIPv6AcceptRA=no\n'
+        contexts = self.fixtures(files, commands)
+        with contexts[0], contexts[1], contexts[2], contexts[3]:
+            report = host.inspect({**INPUT, 'tailscale_exit': True})
+            self.assertFalse(report['ready'])
+            self.assertIn('Enable persistent uplink IPv6 router advertisements', report['changes'])
+
+    def test_ra_apply_reconfigures_only_uplink_and_keeps_dns_and_gateway_services(self):
+        dropin = pathlib.Path('/etc/systemd/network/10-netplan-uplink.network.d/90-home-gateway-uplink-ra.conf')
+        initial = {'supported': True, 'ready': False, 'blockers': [], 'changes': ['RA']}
+        ready = {'supported': True, 'ready': True, 'blockers': [], 'changes': []}
+        with patch.object(host, 'inspect', side_effect=[initial, ready]), \
+                patch.object(host, 'networkd_ra', return_value={'path': dropin, 'loaded': False}), \
+                patch.object(host, 'read', side_effect=lambda path, default='':
+                             json.dumps(host.docker_settings({})) if path == host.DAEMON else ''), \
+                patch.object(host.shutil, 'which', return_value='/usr/bin/tool'), \
+                patch.object(host, 'command', return_value=types.SimpleNamespace(returncode=0, stdout='')), \
+                patch.object(host, 'run') as execute, patch.object(host, 'write_owned') as write:
+            self.assertTrue(host.apply({**INPUT, 'tailscale_exit': True})['ready'])
+        write.assert_any_call(dropin, host.UPLINK_RA)
+        self.assertIn('UseDNS=no', host.UPLINK_RA)
+        self.assertIn('UseDomains=no', host.UPLINK_RA)
+        self.assertIn('DHCPv6Client=no', host.UPLINK_RA)
+        commands = [call.args[0] for call in execute.call_args_list]
+        self.assertIn(['networkctl', 'reload'], commands)
+        self.assertIn(['networkctl', 'reconfigure', 'enp1s0'], commands)
+        wait = ['/lib/systemd/systemd-networkd-wait-online', '--interface=enp1s0:routable', '--ipv4', '--timeout=15']
+        self.assertGreater(commands.index(wait), commands.index(['networkctl', 'reconfigure', 'enp1s0']))
+        self.assertFalse(any(command[0] == 'systemctl' for command in commands))
 
     def test_rejects_unsupported_system_and_network_conflicts(self):
         cases = [({'/proc/sys/kernel/osrelease': '6.6-microsoft-standard-WSL2'}, {}, 'WSL'),

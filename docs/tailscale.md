@@ -109,6 +109,8 @@ IPv4 公司目的地址绕过透明代理、走 OpenConnect；VPN 断线后保�
 
 本镜像当前只支持 IPv4 出口。IPv6 转发开启用于让远端收到明确的 ICMPv6 no-route；从 tailscale0 转发的 IPv6 被拒绝，不走公网直连，双栈应用可回退到 IPv4，只有 IPv6 的服务不能使用此出口。访问网关本身的 Tailscale IPv6 地址属于本地输入，SSH 不受转发拒绝影响。启用 IPv6 转发时保留上游路由通告接收。
 
+上游 IPv6 也可用于 Tailscale 自身的公网直连传输，与客户端的 IPv4 出口是两回事。主机准备工具为 systemd-networkd 管理的上联安装持久 RA drop-in，包含旧版 Netplan 中 `accept-ra: false` 的虚拟机；只重新配置上联，不重启网络服务或网关容器。该配置不接受 RA 中的 DNS 或搜索域，保留网关的分流 DNS。networkd 使用用户态 RA，此时内核 `accept_ra=0` 是正常值；不能只临时设置 `accept_ra=2`，它会在重启或链路重配置时被覆盖。使用其他网络管理器时仍需在该管理器中确认 RA 持久配置。上级网络没有 IPv6 时，不影响 IPv4 出口工作。来源：[systemd-networkd RA 说明](https://www.freedesktop.org/software/systemd/man/latest/systemd.network.html#IPv6AcceptRA=)。
+
 紧急撤销发布可以运行 `python3 tools/tailscale.py exit-off`，无需容器工作或解密 pass；管理连接仍保留。手机立即恢复普通移动上网时，将 Exit node 改回“无”。需要停用镜像适配时，在 pass 将 `tailscale_exit` 改为 false 并重新部署，先撤销发布。不会自动撤销服务端管理台的批准记录；每次启用前仍需重新验证路径。
 
 `gatewayctl status/check --json` 显示出口适配是否配置、接口是否存在、网段同步状态及实际源校验参数；`gatewayctl tailscale-status` 查看 Tailscale 状态。这些检查仍不能代替客户端的实际访问。验收至少覆盖移动网络下的国内、Google、公司网站、DNS、Clash 命中的分组，以及公司 VPN 停机后的断线保护。网关自身请求不会经过 tailscale0，不能代替该测试。

@@ -14,6 +14,7 @@ SYSCTL = pathlib.Path('/etc/sysctl.d/90-home-gateway.conf')
 BACKUP = pathlib.Path('/var/lib/home-gateway/host-before')
 DOCKER_NETWORK = {'bridge': 'none', 'iptables': False, 'ip6tables': False, 'ip-forward': False}
 TAILSCALE_RECEIPT = pathlib.Path('/var/lib/home-gateway/tailscale-managed.json')
+UPLINK_RA = '[Network]\nIPv6AcceptRA=yes\n\n[IPv6AcceptRA]\nUseDNS=no\nUseDomains=no\nDHCPv6Client=no\n'
 APT = ['apt-get', '-o', 'Acquire::Retries=2', '-o', 'Acquire::http::Timeout=20',
        '-o', 'Acquire::https::Timeout=20']
 
@@ -50,7 +51,25 @@ def settings(value):
     return interface, address, gateway, (str(controller), int(port))
 
 
-def sysctls(interface, tailscale_exit=False):
+def networkd_ra(interface):
+    """Use networkd's RA client when it owns the uplink, including Netplan links."""
+    if not shutil.which('networkctl'):
+        return None
+    result = command(['networkctl', 'status', '--json=short', interface])
+    if result.returncode:
+        return None
+    try:
+        state = json.loads(result.stdout)
+        network_file = pathlib.Path(state.get('NetworkFile', ''))
+        if not network_file.is_absolute() or not re.fullmatch(r'[a-zA-Z0-9_.:-]+\.network', network_file.name):
+            return None
+        path = pathlib.Path('/etc/systemd/network') / (network_file.name + '.d') / '90-home-gateway-uplink-ra.conf'
+        return {'path': path, 'loaded': str(path) in state.get('NetworkFileDropins', [])}
+    except (ValueError, TypeError, AttributeError):
+        return None
+
+
+def sysctls(interface, tailscale_exit=False, networkd=False):
     # Slash separators also handle dotted VLAN interface names correctly.
     values = {'net/ipv4/ip_forward': '1', 'net/ipv4/conf/all/send_redirects': '0',
             'net/ipv4/conf/default/send_redirects': '0', f'net/ipv4/conf/{interface}/send_redirects': '0',
@@ -58,13 +77,15 @@ def sysctls(interface, tailscale_exit=False):
             f'net/ipv4/conf/{interface}/rp_filter': '0', 'net/ipv4/conf/all/src_valid_mark': '0',
             'net/ipv4/conf/default/src_valid_mark': '0', f'net/ipv4/conf/{interface}/src_valid_mark': '0'}
     if tailscale_exit:
-        # Enable routing before the nftables IPv6 rejection, preserving upstream RA.
-        values.update({'net/ipv6/conf/all/forwarding': '1', f'net/ipv6/conf/{interface}/accept_ra': '2'})
+        # networkd implements RA in userspace and intentionally sets kernel RA to 0.
+        values['net/ipv6/conf/all/forwarding'] = '1'
+        if not networkd:
+            values[f'net/ipv6/conf/{interface}/accept_ra'] = '2'
     return values
 
 
-def sysctl_text(interface, tailscale_exit=False):
-    return ''.join(key + '=' + value + '\n' for key, value in sysctls(interface, tailscale_exit).items())
+def sysctl_text(interface, tailscale_exit=False, networkd=False):
+    return ''.join(key + '=' + value + '\n' for key, value in sysctls(interface, tailscale_exit, networkd).items())
 
 
 def docker_settings(existing):
@@ -223,9 +244,13 @@ def inspect(value):
         blockers.append('tailscale_exit must be a boolean')
     if tailscale_exit and not TAILSCALE_RECEIPT.exists():
         blockers.append('Install project-managed Tailscale before preparing an exit node')
-    if read(SYSCTL) != sysctl_text(interface, tailscale_exit):
+    ra = networkd_ra(interface) if tailscale_exit else None
+    if ra and (read(ra['path']) != UPLINK_RA or not ra['loaded']):
+        changes.append('Enable persistent uplink IPv6 router advertisements')
+    if read(SYSCTL) != sysctl_text(interface, tailscale_exit, bool(ra)):
         changes.append('Write gateway forwarding settings for ' + interface)
-    if any(read('/proc/sys/' + key).strip() != expected for key, expected in sysctls(interface, tailscale_exit).items()):
+    if any(read('/proc/sys/' + key).strip() != expected
+           for key, expected in sysctls(interface, tailscale_exit, bool(ra)).items()):
         changes.append('Apply gateway forwarding settings')
     return {'supported': not blockers, 'ready': not blockers and not changes,
             'blockers': sorted(set(blockers)), 'changes': changes}
@@ -298,10 +323,20 @@ def apply(value):
         if docker_present:
             run(['systemctl', 'restart', 'docker'])
     run(['modprobe', 'tun'])
-    if read(SYSCTL) != sysctl_text(interface, value.get('tailscale_exit', False)):
-        write_owned(SYSCTL, sysctl_text(interface, value.get('tailscale_exit', False)))
+    tailscale_exit = value.get('tailscale_exit', False)
+    ra = networkd_ra(interface) if tailscale_exit else None
+    desired_sysctl = sysctl_text(interface, tailscale_exit, bool(ra))
+    if read(SYSCTL) != desired_sysctl:
+        write_owned(SYSCTL, desired_sysctl)
     # Apply only this project's keys; do not reapply all host sysctl files.
     run(['sysctl', '-p', str(SYSCTL)])
+    if ra and (read(ra['path']) != UPLINK_RA or not ra['loaded']):
+        if read(ra['path']) != UPLINK_RA:
+            write_owned(ra['path'], UPLINK_RA)
+        run(['networkctl', 'reload'])
+        run(['networkctl', 'reconfigure', interface])
+        run(['/lib/systemd/systemd-networkd-wait-online', '--interface=' + interface + ':routable',
+             '--ipv4', '--timeout=15'])
     return inspect(value)
 
 
