@@ -58,6 +58,7 @@ class Component:
     def status(self):
         state = 'running' if self.process else ('stopped' if self.attempts >= self.max_attempts else 'retry-wait')
         return {'state': state, 'attempts': self.attempts, 'max_attempts': self.max_attempts,
+                'pid': self.process.pid if self.process else None,
                 'last_exit': self.last_exit,
                 'retry_in_seconds': max(0, round(self.next_attempt - time.monotonic(), 1)) if state == 'retry-wait' else None}
 

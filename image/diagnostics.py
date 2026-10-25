@@ -5,6 +5,7 @@ from collections import deque
 from concurrent.futures import ThreadPoolExecutor
 import json
 import pathlib
+import sqlite3
 import subprocess
 import sys
 import time
@@ -13,7 +14,8 @@ sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
 from network import proxy_routing_status, tailscale_exit_enabled, TAILSCALE_INTERFACE
 from runtime import DATA, load_config
 
-ACTIONS = ('status', 'check', 'logs-vpn', 'logs-clash', 'retry-vpn', 'retry-clash', 'stop-vpn', 'stop-clash')
+ACTIONS = ('status', 'check', 'logs-vpn', 'logs-clash', 'retry-vpn', 'retry-clash', 'stop-vpn', 'stop-clash',
+           'usage', 'usage-status', 'logs-usage', 'retry-usage', 'stop-usage')
 
 
 def read_json(name):
@@ -25,6 +27,27 @@ def read_json(name):
 
 def command(args):
     return subprocess.run(args, capture_output=True, text=True, timeout=10)
+
+
+def usage_status():
+    value = read_json('usage-status.json') or {'state': 'missing'}
+    supervisor = read_json('status.json') or {}
+    component = supervisor.get('components', {}).get('usage') or {}
+    age = (int(time.time() * 1000) - value['updated_ms']) / 1000 if value.get('updated_ms') else None
+    fresh = age is not None and -5 <= age < 15
+    value = {**value, 'age_seconds': round(age, 1) if age is not None else None,
+             'fresh': fresh, 'component': component,
+             'ready': fresh and value['state'] == 'running' and value.get('pid') == component.get('pid')}
+    value['database_bytes'] = sum((DATA / name).stat().st_size for name in
+                                   ('usage.sqlite3', 'usage.sqlite3-wal') if (DATA / name).exists())
+    return value
+
+
+def print_usage_status(value):
+    print(f"Usage: {value['state']}; {'fresh' if value['fresh'] else 'stale or missing'}; "
+          f"last commit: {value.get('last_commit_ms')}; database bytes: {value['database_bytes']}")
+    if value.get('error'):
+        print('Collector error: ' + value['error'] + '; use logs-usage / retry-usage')
 
 
 def status():
@@ -64,6 +87,7 @@ def status():
                               'route_policy': route_policy, 'route_policy_age_seconds': route_age,
                               'route_policy_fresh': route_age is not None and -5 <= route_age < 20},
             'dns_policy': read_json('dns-status.json'),
+            'usage': usage_status(),
             'subscription': {key: subscription[key] for key in ('state', 'last_attempt', 'last_success', 'error', 'nodes', 'groups', 'rules') if key in subscription}}
 
 
@@ -98,6 +122,8 @@ def print_status(value):
           + (f'; error: {dns["error"]}' if dns.get('error') else ''))
     subscription = value.get('subscription') or {}
     print(f'Subscription: {subscription.get("state", "unknown")}; last success: {subscription.get("last_success", "unknown")}')
+    if value.get('usage'):
+        print_usage_status(value['usage'])
 
 
 def http_check(label, url, proxy=False):
@@ -133,9 +159,30 @@ def main(argv=None):
     parser.add_argument('--json', action='store_true', help='Machine-readable status or checks')
     parser.add_argument('--lines', type=int, default=60, help='Log lines (1 to 500)')
     parser.add_argument('--corporate-url', help='Optional internal HTTPS address for a reachability check')
+    parser.add_argument('--since', default='1h', help='Usage window, e.g. 15m, 1h or 2d')
+    parser.add_argument('--group-by', choices=('host', 'outbound', 'protocol', 'source', 'time'), default='host')
+    parser.add_argument('--proxy-only', action='store_true', help='Filter attributed rows to proxy outbounds')
+    parser.add_argument('--limit', type=int, default=20, help='Usage result rows (1 to 500)')
+    parser.add_argument('--bucket-seconds', type=int, choices=(1, 60, 3600), default=60, help='Time grouping size')
     args = parser.parse_args(argv)
     if not 1 <= args.lines <= 500:
         parser.error('--lines must be between 1 and 500')
+    if args.action == 'usage-status':
+        value = usage_status()
+        print(json.dumps(value, indent=2)) if args.json else print_usage_status(value)
+        return 0 if value['ready'] else 1
+    if args.action == 'usage':
+        from usage import report, print_report
+        try:
+            value = report(DATA / 'usage.sqlite3', since=args.since, group_by=args.group_by,
+                           proxy_only=args.proxy_only, limit=args.limit, bucket_seconds=args.bucket_seconds)
+        except ValueError as error:
+            parser.error(str(error))
+        except sqlite3.Error:
+            print('Usage database unavailable; inspect gatewayctl usage-status / logs-usage.', file=sys.stderr)
+            return 1
+        print(json.dumps(value, indent=2, ensure_ascii=False)) if args.json else print_report(value)
+        return 0
     if args.action in ('status', 'check'):
         value = status()
         if args.action == 'check':

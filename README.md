@@ -22,6 +22,7 @@ Wi-Fi 路由器的 WAN 网关和 DNS 指向 Ubuntu 网关。使用 Hyper-V 时�
 - 每日更新订阅，保留本地网关配置、API 密钥和节点选择。更新失败继续使用上次有效配置；节点删除时按配置的地区筛选回退。
 - MetaCubeXD 网页面板，在受限的局域网地址监听并要求 API 密钥。
 - VPN 有限重试；Mihomo 最多重试三次。可分别查看日志、停止或手动重试。
+- Mihomo 每秒流量记账，按域名、节点、TCP/UDP 查询；SQLite 每 5 秒提交，采集故障不影响转发。见 [流量统计](docs/usage.md)。
 - 配置只读挂载，镜像不含个人配置；部署先验证，再切换，已有部署失败时回退。
 - GPG 加密状态备份，恢复订阅缓存、地区数据库和节点选择。
 - 部署时同步管理端公钥文件；Hyper-V 首次创建也使用同一授权列表。
@@ -93,6 +94,8 @@ gatewayctl logs-vpn
 gatewayctl retry-vpn
 gatewayctl stop-vpn        # 停止 VPN 并暂停自动重试
 gatewayctl logs-system     # VM 服务日志，容器停止时也可使用
+gatewayctl usage-status    # 采集状态、最后提交和数据库大小
+gatewayctl usage --since 1h --group-by host --proxy-only
 ```
 
 `gatewayctl` 的诊断和组件控制逻辑位于镜像内。网关的同名入口只负责权限、容器执行以及容器停机时的基础诊断；原生 Linux 主机使用相同入口。`status --json`、`check --json` 可用于机器读取。公司站点探测使用部署配置中的 `runtime.diagnostics.corporate_url`，也可临时传入 `gatewayctl check --corporate-url https://<内网地址>/`；401/403 表示站点可达但需要应用授权。

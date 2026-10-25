@@ -68,6 +68,8 @@ if config['vpn'].get('enabled', True):
                                 retry_delay=vpn.get('retry_delay_seconds', 15),
                                 retry_max_delay=vpn.get('retry_max_delay_seconds', 60),
                                 stable_reset_seconds=vpn.get('stable_reset_seconds', 600)))
+if config['clash'].get('enabled', True) and config.get('usage', {}).get('enabled', True):
+    components.append(Component('usage', ['python3', '/app/usage_collect.py'], 3))
 
 last_network_state = None
 last_routing_check = 0
@@ -111,9 +113,13 @@ try:
             last_rotate = time.monotonic()
         time.sleep(1)
 finally:
+    for component in components:
+        if component.name == 'usage':
+            component.stop()
     proxy_off()
     for component in components:
-        component.stop()
+        if component.name != 'usage':
+            component.stop()
     policy = read_policy()
     policy['up'] = False
     save_json(DATA / 'vpn-policy.json', policy)

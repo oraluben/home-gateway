@@ -166,7 +166,7 @@ def main():
              candidate_image, '-t', '-d', '/data/mihomo', '-f', '/validate.yaml'])
         run(['docker', 'run', '--rm', '--network=none', '--entrypoint', 'python3',
              '-v', str(stage / 'config') + ':/config:ro', candidate_image, '-c',
-             'from runtime import CONFIG,load_config;from vpn_auth import openconnect_command;'
+             'from runtime import CONFIG,load_config;from vpn_auth import openconnect_command;from usage import Ledger;'
              'v=load_config().get("vpn",{});'
              'openconnect_command(v,CONFIG.parent) if v.get("enabled",True) else None'])
         write(build_record, json.dumps({'recipe': recipe, 'image_id': candidate_id}).encode())
