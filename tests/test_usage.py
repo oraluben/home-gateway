@@ -297,6 +297,41 @@ class LedgerTests(unittest.TestCase):
         self.sample(3, up=500, history=history([event]))
         self.assertEqual(self.total(), (400, 0))
 
+    def test_new_active_connection_between_snapshot_and_timestamp_is_not_baselined(self):
+        self.sample(0, history=history())
+        # The previous response was timestamped 4 ms after this connection
+        # started, but its active-map enumeration had already passed it.
+        self.sample(1, up=100, down=200, history=history())
+        item = connection(up=150, down=300, born=0.996)
+        flags = self.sample(2, [item], 150, 300, history=history())
+        self.assertNotIn('late_connection_baseline', flags)
+        self.assertEqual(self.total(), (150, 300))
+        row = dict(self.ledger.db.execute('SELECT * FROM usage').fetchone())
+        self.assertEqual(row['quality'], 'recovered')
+        self.assertEqual(row['start_ms'], BASE + 996)
+        self.reopen()
+        event = closed(connection(up=180, down=360, born=0.996))
+        self.sample(3, up=180, down=360, history=history([event]))
+        self.sample(4, up=180, down=360, history=history([event]))
+        self.assertEqual(self.total(), (180, 360))
+
+    def test_unknown_active_connection_before_history_coverage_keeps_its_baseline(self):
+        self.sample(0, history=history())
+        flags = self.sample(1, [connection(up=100, born=-60)], 100, history=history())
+        self.assertIn('late_connection_baseline', flags)
+        self.sample(2, [connection(up=150, born=-60)], 150, history=history())
+        self.assertEqual(self.total(), (50, 0))
+
+    def test_expired_active_checkpoint_is_not_recounted_with_history_enabled(self):
+        self.sample(0, [connection(up=100)], 100, history=history())
+        self.sample(3660, up=200, history=history())
+        self.ledger.flush()
+        self.ledger.prune(BASE + 3660000, retention_hours=1)
+        flags = self.sample(3661, [connection(up=10000)], 200, history=history())
+        self.assertIn('late_connection_baseline', flags)
+        self.sample(3662, [connection(up=10010)], 210, history=history())
+        self.assertEqual(self.total(), (10, 0))
+
     def test_late_revision_adds_only_the_remaining_delta(self):
         self.sample(0, history=history())
         self.sample(1, up=100, history=history([closed(connection(up=100, born=0.1))]))

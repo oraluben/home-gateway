@@ -274,11 +274,16 @@ class Ledger:
             else:
                 # Unknown old connections may be evicted tombstones; never recount their lifetime.
                 threshold = max(history_start or 0, wall_ms - self.retention_hours * 3600000)
-                known_lifetime = is_closed and first_close and enabled and born >= threshold
+                # Snapshot enumeration and its collector timestamp are not atomic.
+                # A new active flow can start just before the previous timestamp
+                # without appearing in that snapshot. Coverage and retained disk
+                # checkpoints let us include it without replaying old lifetimes.
+                known_lifetime = enabled and born >= threshold and (not is_closed or first_close)
                 count = not initial and (changed or (not clock_jump and (known_lifetime or (not is_closed and born >= start))))
                 du, dd = (up, down) if count else (0, 0)
-                since = (born if is_closed else start) if count else wall_ms
-                recovered = gap or clock_jump or (is_closed and wall_ms - since > 1800)
+                since = (born if is_closed or known_lifetime else start) if count else wall_ms
+                recovered = (gap or clock_jump or (known_lifetime and born < start)
+                             or (is_closed and wall_ms - since > 1800))
                 high_up, high_down = up, down
                 if not initial and not changed and not count:
                     flags.add('late_connection_baseline')
