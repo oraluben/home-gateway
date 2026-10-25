@@ -20,6 +20,7 @@ os.environ.setdefault('HOME_GATEWAY_CONFIG', str(PROJECT / 'config/gateway.yaml'
 sys.path.insert(0, str(PROJECT / 'image'))
 from configuration import render_mihomo
 from runtime import load_config
+from topology import component_enabled
 PHASE = 'starting'
 
 
@@ -147,7 +148,7 @@ def refresh(config):
 
 def main():
     config = load_config()
-    if not config.get('subscription', {}).get('enabled', False):
+    if not component_enabled(config, 'clash') or not component_enabled(config, 'subscription', False):
         raise RuntimeError('Subscription updates are not enabled')
     directory = DATA / 'subscription'
     directory.mkdir(mode=0o700, exist_ok=True)

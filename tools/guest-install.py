@@ -104,6 +104,25 @@ def install_ui(archive, destination):
     (destination / 'config.js').write_text("window.__METACUBEXD_CONFIG__ = {defaultBackendURL: window.location.origin, githubToken: ''};\n")
 
 
+def prepare_mihomo(config, data, stage):
+    """Optional proxy inputs must not make a VPN-only deployment depend on HTTP."""
+    from topology import component_enabled
+    if not component_enabled(config, 'clash'):
+        return False
+    subscription = None
+    if component_enabled(config, 'subscription', False):
+        path = data / 'subscription/current.yaml'
+        if not path.is_file():
+            sys.path.insert(0, str(stage))
+            module = importlib.import_module('update-subscription')
+            write(path, module.download(config['subscription']))
+        subscription = yaml.safe_load(path.read_bytes())
+    render = importlib.import_module('configuration').render_mihomo
+    generated = render(config, subscription)
+    write(stage / 'validation.yaml', yaml.safe_dump(generated, allow_unicode=True, sort_keys=False).encode())
+    return True
+
+
 def main():
     global PHASE
     parser = argparse.ArgumentParser()
@@ -127,6 +146,11 @@ def main():
         if hashlib.sha256((stage / 'artifacts/dashboard.tgz').read_bytes()).hexdigest() != versions['dashboard']['sha256']:
             raise ValueError('Dashboard checksum mismatch')
         config = bundle['runtime']
+        sys.path.insert(0, str(stage / 'image'))
+        from topology import component_enabled
+        from firewall import render_base
+        # Validate the supported host policy without touching the kernel.
+        render_base(config, {'up': False, 'prefixes': [], 'dns': [], 'domains': []})
         write(stage / 'config/gateway.yaml', yaml.safe_dump(config, allow_unicode=True, sort_keys=False).encode())
         write_vpn_secrets(stage, bundle)
         data = PROJECT / 'data'
@@ -147,17 +171,9 @@ def main():
                         write(stage / 'restore' / entry.name, archive.extractfile(entry).read())
                         restored.append(entry.name)
             candidate_data = stage / 'restore/data'
-        if not (candidate_data / 'subscription/current.yaml').is_file():
-            sys.path.insert(0, str(stage))
-            sys.path.insert(0, str(stage / 'image'))
-            os.environ['HOME_GATEWAY_DATA'] = str(candidate_data)
-            module = importlib.import_module('update-subscription')
-            write(candidate_data / 'subscription/current.yaml', module.download(config['subscription']))
         os.environ['HOME_GATEWAY_DATA'] = str(candidate_data)
         sys.path.insert(0, str(stage / 'image'))
-        render = importlib.import_module('configuration').render_mihomo
-        generated = render(config, yaml.safe_load((candidate_data / 'subscription/current.yaml').read_bytes()))
-        write(stage / 'validation.yaml', yaml.safe_dump(generated, allow_unicode=True, sort_keys=False).encode())
+        validate_mihomo = prepare_mihomo(config, candidate_data, stage)
         PHASE = 'build'
         recipe = image_recipe(stage)
         build_record = data / 'builds' / (recipe + '.json')
@@ -186,9 +202,10 @@ def main():
             checked = run(['ssh-keygen', '-lf', str(stage / 'authorized_keys')])
             if len(checked.splitlines()) != ssh_target['count']:
                 raise ValueError('SSH public-key validation failed')
-        run(['docker', 'run', '--rm', '--network=none', '--entrypoint', 'mihomo',
-             '-v', str(candidate_data) + ':/data:ro', '-v', str(stage / 'validation.yaml') + ':/validate.yaml:ro',
-             candidate_image, '-t', '-d', '/data/mihomo', '-f', '/validate.yaml'])
+        if validate_mihomo:
+            run(['docker', 'run', '--rm', '--network=none', '--entrypoint', 'mihomo',
+                 '-v', str(candidate_data) + ':/data:ro', '-v', str(stage / 'validation.yaml') + ':/validate.yaml:ro',
+                 candidate_image, '-t', '-d', '/data/mihomo', '-f', '/validate.yaml'])
         run(['docker', 'run', '--rm', '--network=none', '--entrypoint', 'python3',
              '-v', str(stage / 'config') + ':/config:ro', candidate_image, '-c',
              'from runtime import CONFIG,load_config;from vpn_auth import openconnect_command;from usage import Ledger;'
@@ -266,10 +283,10 @@ def main():
             while time.monotonic() < deadline:
                 status = json.loads((data / 'status.json').read_text()) if (data / 'status.json').exists() else {}
                 recent = (data / 'status.json').exists() and time.time() - (data / 'status.json').stat().st_mtime < 3
-                proxy_ready = not config['clash'].get('enabled', True) or status.get('transparent_proxy')
-                vpn_ready = not config['vpn'].get('enabled', True) or status.get('vpn_connected')
+                proxy_ready = not component_enabled(config, 'clash') or status.get('transparent_proxy')
+                vpn_ready = not component_enabled(config, 'vpn') or status.get('vpn_connected')
                 usage_ready = True
-                if config.get('usage', {}).get('require_history') and config.get('usage', {}).get('enabled', True):
+                if component_enabled(config, 'clash') and config.get('usage', {}).get('require_history') and component_enabled(config, 'usage'):
                     usage_status = json.loads((data / 'usage-status.json').read_text()) if (data / 'usage-status.json').exists() else {}
                     usage_ready = (usage_status.get('state') == 'running' and usage_status.get('mode') == 'close-history'
                                    and usage_status.get('pid') == status.get('components', {}).get('usage', {}).get('pid')

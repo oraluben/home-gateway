@@ -11,6 +11,7 @@ import shutil
 import subprocess
 import tarfile
 import tempfile
+from target_platform import linux_platform
 
 
 def git(source, *args):
@@ -23,7 +24,9 @@ def main():
     parser.add_argument('--output', required=True, help='New build directory')
     parser.add_argument('--go', default=shutil.which('go'))
     parser.add_argument('--feature', action='append', default=[])
+    parser.add_argument('--arch', choices=('amd64', 'arm64'), default='amd64')
     args = parser.parse_args()
+    platform = linux_platform(args.arch)
     source, output = pathlib.Path(args.source).expanduser().resolve(), pathlib.Path(args.output).expanduser().resolve()
     if not args.go:
         raise ValueError('Select an installed Go toolchain with --go')
@@ -44,10 +47,10 @@ def main():
     (output / 'source.tar.gz').write_bytes(archive)
     license_body = git(source, 'show', 'HEAD:LICENSE')
     (output / 'LICENSE').write_bytes(license_body)
-    binary = output / 'mihomo-linux-amd64'
+    binary = output / ('mihomo-linux-' + platform.arch)
     flags = (f'-X github.com/metacubex/mihomo/constant.Version={version} '
              f'-X github.com/metacubex/mihomo/constant.BuildTime={date} -s -w -buildid=')
-    environment = {**os.environ, 'CGO_ENABLED': '0', 'GOOS': 'linux', 'GOARCH': 'amd64',
+    environment = {**os.environ, 'CGO_ENABLED': '0', 'GOOS': 'linux', 'GOARCH': platform.arch,
                    'GOAMD64': 'v1', 'SOURCE_DATE_EPOCH': str(epoch)}
     # Build the exact tracked source bundle, not ignored/untracked local inputs.
     with tempfile.TemporaryDirectory(prefix='mihomo-build-') as temporary:
@@ -56,11 +59,13 @@ def main():
         subprocess.run([args.go, 'build', '-p', '4', '-tags', 'with_gvisor', '-trimpath', '-buildvcs=false',
                         '-ldflags', flags, '-o', str(binary), '.'], cwd=temporary, env=environment, check=True)
     binary.chmod(0o755)
+    with binary.open('rb') as stream:
+        platform.verify_elf(stream.read(20))
     toolchain = subprocess.run([args.go, 'version'], capture_output=True, text=True, check=True).stdout.strip()
     manifest = {'format': 1, 'version': version, 'binary': binary.name,
                 'binary_sha256': hashlib.sha256(binary.read_bytes()).hexdigest(), 'license': 'LICENSE',
                 'license_sha256': hashlib.sha256(license_body).hexdigest(),
-                'features': args.feature, 'goos': 'linux', 'goarch': 'amd64', 'toolchain': toolchain,
+                'features': args.feature, 'goos': 'linux', 'goarch': platform.arch, 'toolchain': toolchain,
                 'build_tags': ['with_gvisor'], 'source': {'repository': repository, 'revision': revision,
                 'archive': 'source.tar.gz', 'sha256': hashlib.sha256(archive).hexdigest()}}
     (output / 'build.json').write_text(json.dumps(manifest, indent=2) + '\n')

@@ -30,7 +30,7 @@ EOF
 cat >/etc/systemd/system/home-gateway.service <<'EOF'
 [Unit]
 Description=Home gateway proxy and VPN appliance
-After=docker.service home-gateway-base.service
+After=docker.service home-gateway-base.service home-gateway-dns.service
 Requires=docker.service home-gateway-base.service
 StartLimitIntervalSec=infinity
 StartLimitBurst=3
@@ -49,7 +49,7 @@ EOF
 systemctl daemon-reload
 cat >/etc/systemd/system/home-gateway-dns.service <<'EOF'
 [Unit]
-Description=Apply pushed VPN DNS policy to the gateway resolver
+Description=Reconcile gateway base forwarding and pushed VPN DNS policy
 After=home-gateway-base.service
 Requires=home-gateway-base.service
 StartLimitIntervalSec=infinity
@@ -62,8 +62,12 @@ RestartSec=5
 WantedBy=multi-user.target
 EOF
 systemctl daemon-reload
-systemctl enable --now home-gateway-base
-systemctl enable --now home-gateway-dns
+# Both processes read configuration at startup. Stop the old watcher before
+# replacing base setup; enable --now alone leaves an old process running.
+systemctl stop home-gateway-dns
+systemctl enable home-gateway-base home-gateway-dns
+systemctl restart home-gateway-base
+systemctl start home-gateway-dns
 cat >/etc/systemd/system/home-gateway-tailscale-policy.service <<'EOF'
 [Unit]
 Description=Publish pushed VPN destinations for the Tailscale exit node

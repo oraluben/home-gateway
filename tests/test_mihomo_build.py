@@ -72,6 +72,15 @@ class MihomoBuildTests(unittest.TestCase):
         self.assertEqual(runtime['mihomo']['connection-history'], {'capacity': 4096, 'log': False})
         self.assertTrue(runtime['usage']['require_history'])
 
+    def test_arm64_artifact_is_verified_without_claiming_host_installation_support(self):
+        binary = b'\x7fELF\x02\x01' + bytes(12) + b'\xb7\x00' + b'public-arm64-binary'
+        (self.folder / 'mihomo').write_bytes(binary)
+        self.value.update(goarch='arm64', binary_sha256=hashlib.sha256(binary).hexdigest())
+        self.write()
+        self.assertEqual(selected_build(self.path, expected_arch='aarch64')['metadata']['goarch'], 'arm64')
+        with self.assertRaisesRegex(ValueError, 'differs'):
+            selected_build(self.path, expected_arch='amd64')
+
     def test_archive_pins_selected_binary_and_includes_corresponding_sources(self):
         build = selected_build(self.path)
         project = self.folder / 'project'

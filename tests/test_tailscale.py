@@ -44,7 +44,7 @@ class ExitAdvertisementTests(unittest.TestCase):
 
 class PushedRouteTests(unittest.TestCase):
     def test_publication_stops_after_four_failures(self):
-        with patch.object(adapter, 'load_config', return_value={'network': {'tailscale_exit': True}}), \
+        with patch.object(adapter, 'load_config', return_value={'network': {'interface': 'eth0', 'tailscale_exit': True}}), \
                 patch.object(adapter, 'read_policy', return_value={'prefixes': ['10.2.0.0/16']}), \
                 patch.object(adapter, 'preferences', return_value={'AdvertiseRoutes': ['0.0.0.0/0','::/0']}), \
                 patch.object(adapter.subprocess, 'run', return_value=types.SimpleNamespace(returncode=1)) as run, \

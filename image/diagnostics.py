@@ -11,7 +11,8 @@ import sys
 import time
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
-from network import proxy_routing_status, tailscale_exit_enabled, TAILSCALE_INTERFACE
+from network import proxy_routing_status, TAILSCALE_INTERFACE
+from topology import Topology, component_enabled
 from runtime import DATA, load_config
 
 ACTIONS = ('status', 'check', 'logs-vpn', 'logs-clash', 'retry-vpn', 'retry-clash', 'stop-vpn', 'stop-clash',
@@ -53,13 +54,14 @@ def print_usage_status(value):
 
 def status():
     config = load_config()
+    topology = Topology.parse(config['network'])
     controller = read_json('status.json')
     path = DATA / 'status.json'
     age = round(time.time() - path.stat().st_mtime, 1) if path.exists() else None
     routing = proxy_routing_status()
     forwarding = pathlib.Path('/proc/sys/net/ipv4/ip_forward').read_text().strip() == '1'
-    interfaces = ['all', config['network']['interface']]
-    remote_exit = tailscale_exit_enabled(config)
+    interfaces = list(dict.fromkeys(['all', topology.lan.interface, topology.wan.interface]))
+    remote_exit = topology.tailscale_exit
     if remote_exit:
         interfaces.append(TAILSCALE_INTERFACE)
     source_marks = {}
@@ -70,7 +72,10 @@ def status():
     proxy_rules = command(['nft', 'list', 'table', 'inet', 'home_gateway_proxy']).returncode == 0
     base_rules = command(['nft', 'list', 'table', 'inet', 'home_gateway_base']).returncode == 0
     receipt = read_json('deployment.json') or {}
-    addresses = command(['ip', '-j', '-4', 'address', 'show', 'dev', config['network']['interface']])
+    addresses = command(['ip', '-j', '-4', 'address', 'show', 'dev', topology.lan.interface])
+    network_policy = read_json('network-status.json') or {}
+    network_path = DATA / 'network-status.json'
+    network_age = round(time.time() - network_path.stat().st_mtime, 1) if network_path.exists() else None
     subscription = read_json('subscription-status.json') or {}
     route_policy = read_json('tailscale-policy-status.json') if remote_exit else None
     route_path = DATA / 'tailscale-policy-status.json'
@@ -79,6 +84,10 @@ def status():
     return {'version': receipt.get('version'), 'container': 'running',
             'mihomo_build': {key: receipt.get('mihomo', {}).get(key) for key in ('version', 'binary_sha256', 'features', 'source')},
             'addresses': json.loads(addresses.stdout) if addresses.returncode == 0 else [],
+            'network': {'mode': topology.mode, 'lan_interface': topology.lan.interface,
+                        'wan_interface': topology.wan.interface},
+            'network_policy': {**network_policy, 'age_seconds': network_age,
+                               'fresh': network_age is not None and -5 <= network_age < 20},
             'controller': controller, 'status_age_seconds': age,
             'supervisor_status_fresh': age is not None and -5 <= age < 10,
             'proxy_routing': routing, 'proxy_rules_present': proxy_rules,
@@ -114,6 +123,8 @@ def print_status(value):
     if not value['source_validation']['ready']:
         print('Source validation: src_valid_mark conflicts with transparent routing; inspect host services')
     print('Base forwarding: ' + ('ready' if value['forwarding_enabled'] and value['base_rules_present'] else 'incomplete'))
+    host_policy = value.get('network_policy') or {}
+    print('Host network policy: ' + ('ready' if host_policy.get('fresh') and host_policy.get('state') == 'ready' else 'stale or failed'))
     if value.get('tailscale_exit', {}).get('configured'):
         print('Tailscale ingress: IPv4 enabled; IPv6 rejected; use tailscale-status to check advertisement/approval')
         policy = value['tailscale_exit'].get('route_policy') or {}
@@ -146,8 +157,9 @@ def http_check(label, url, proxy=False):
 
 def checks(corporate_url=None):
     config = load_config()
-    targets = [('direct_web', 'https://www.baidu.com', False),
-               ('proxy_web', 'https://www.google.com/generate_204', True)]
+    targets = [('direct_web', 'https://www.baidu.com', False)]
+    if component_enabled(config, 'clash'):
+        targets.append(('proxy_web', 'https://www.google.com/generate_204', True))
     corporate_url = corporate_url or config.get('diagnostics', {}).get('corporate_url')
     if corporate_url:
         targets.append(('corporate_web', corporate_url, False))
@@ -198,6 +210,9 @@ def main(argv=None):
             if args.action == 'check' and not any(check['name'] == 'corporate_web' for check in value['checks']):
                 print('Corporate reachability: no URL configured; use --corporate-url or diagnostics.corporate_url')
         if not value['supervisor_status_fresh'] or not value['base_rules_present'] or not value['forwarding_enabled']:
+            return 1
+        host_policy = value.get('network_policy') or {}
+        if not host_policy.get('fresh') or host_policy.get('state') != 'ready':
             return 1
         controller = value['controller'] or {}
         if 'vpn' in controller.get('components', {}) and not controller.get('vpn_connected'):

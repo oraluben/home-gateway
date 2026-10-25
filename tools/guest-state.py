@@ -11,7 +11,13 @@ PROJECT = pathlib.Path('/opt/home-gateway')
 sys.path.insert(0, str(PROJECT))
 updater = importlib.import_module('update-subscription')
 config = updater.load_config()
-choices = updater.selections(config)
+# This transient snapshot helper also runs against appliances from before the
+# topology module existed. Keep its two optional flags self-contained.
+components = {name: config.get(name, {}).get('enabled', default) for name, default in
+              (('clash', True), ('subscription', False))}
+if any(not isinstance(value, bool) for value in components.values()):
+    raise ValueError('Snapshot component flags must be booleans')
+choices = updater.selections(config) if components['clash'] else {}
 names = ['config/gateway.yaml', 'config/secrets/vpn-password', 'config/secrets/vpn-token', 'versions.json',
          'data/subscription/current.yaml', 'data/subscription/previous.yaml']
 names += ['data/mihomo/' + name for name in ('geoip.dat', 'geosite.dat', 'Country.mmdb', 'ASN.mmdb')]
@@ -21,7 +27,7 @@ with tarfile.open(fileobj=stream, mode='w:gz') as archive:
         path = PROJECT / name
         if path.is_file():
             archive.add(path, arcname=name, recursive=False)
-    body = json.dumps({'format': 1, 'created_at': time.time(), 'selected': choices}).encode()
+    body = json.dumps({'format': 1, 'created_at': time.time(), 'selected': choices, 'components': components}).encode()
     entry = tarfile.TarInfo('snapshot.json')
     entry.size, entry.mode = len(body), 0o600
     archive.addfile(entry, io.BytesIO(body))

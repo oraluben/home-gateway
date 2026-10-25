@@ -5,8 +5,13 @@ import pathlib
 import shutil
 import subprocess
 import tempfile
+import hashlib
+import sys
 
 ROOT = pathlib.Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(ROOT / 'image'))
+from topology import deployment_topology, component_enabled
+from target_platform import linux_platform
 
 
 DEFAULT_CONFIG_PASS = 'home-gateway/deployment'
@@ -59,28 +64,36 @@ def operator_values(config):
     """Allowlist non-secret local transport/VM metadata, never full runtime settings."""
     result = {}
     for key, fields in {'connection': ('Address', 'User', 'PublicKey', 'AuthorizedKeysFile', 'SshExecutable', 'KeyPath', 'KnownHostsPath'),
-                        'operator': ('WslDistribution',), 'network': ('address', 'gateway', 'dns')}.items():
+                        'operator': ('WslDistribution',)}.items():
         if key in config:
             result[key] = {name: config[key][name] for name in fields if name in config[key]}
     if 'host' in config:
-        result['host'] = {'backend': config['host']['backend']}
+        result['host'] = {key: config['host'][key] for key in ('backend', 'arch') if key in config['host']}
         if config['host'].get('hyperv'):
             fields = ('VMName', 'SwitchName', 'PhysicalAdapterGuid', 'MacAddress', 'MemoryMB', 'ProcessorCount', 'DiskSizeGB')
             result['host']['hyperv'] = {name: config['host']['hyperv'][name] for name in fields if name in config['host']['hyperv']}
     if 'timezone' in config:
         result['timezone'] = config['timezone']
-    result['runtime'] = {'network': {'interface': config['runtime']['network']['interface']},
-                         'mihomo': {'external-controller': config['runtime']['mihomo']['external-controller']}}
+    topology = deployment_topology(config)
+    result['network'] = topology.as_dict()
+    result['runtime'] = {'mihomo': {'external-controller': config['runtime'].get('mihomo', {}).get('external-controller', '127.0.0.1:9090')}}
     source = config.get('_config_source', '')
     if source.startswith('pass:'):
         result['config_pass'] = source[5:]
     return result
 
 
+def operator_cache(source):
+    if source in ('pass:' + DEFAULT_CONFIG_PASS, ''):
+        return OPERATOR_CACHE.expanduser()
+    key = hashlib.sha256(source.encode()).hexdigest()[:20]
+    return OPERATOR_CACHE.expanduser().parent / 'targets' / (key + '.json')
+
+
 def write_operator(config, path=None):
     if not config.get('_config_source', '').startswith('pass:'):
         return
-    target = pathlib.Path(path).expanduser() if path else OPERATOR_CACHE.expanduser()
+    target = pathlib.Path(path).expanduser() if path else operator_cache(config['_config_source'])
     target.parent.mkdir(parents=True, exist_ok=True)
     temporary = None
     try:
@@ -98,8 +111,11 @@ def write_operator(config, path=None):
 def operator_deployment(path=None):
     """Maintenance can use rendered metadata without unlocking GPG again."""
     source = config_source(path)
-    target = OPERATOR_CACHE.expanduser() if source.startswith('pass:') else pathlib.Path(source).expanduser()
-    if target.exists():
+    targets = ([operator_cache(source), OPERATOR_CACHE.expanduser()] if source.startswith('pass:')
+               else [pathlib.Path(source).expanduser()])
+    for target in dict.fromkeys(targets):
+        if not target.exists():
+            continue
         value = json_object(target.read_text())
         matching = not source.startswith('pass:') or value.get('config_pass') == source[5:]
         if matching and all(key in value for key in ('connection', 'runtime')):
@@ -140,9 +156,19 @@ def ssh_command(config):
 
 def host_inputs(config):
     """Only non-secret target settings are sent to the host initializer."""
-    return {'network': config['network'], 'interface': config['runtime']['network']['interface'],
-            'controller': config['runtime']['mihomo']['external-controller'],
-            'tailscale_exit': config['runtime']['network'].get('tailscale_exit', False)}
+    topology = deployment_topology(config)
+    # The current initializer configures one shared link. A future router
+    # initializer consumes the same model, never guesses roles from NIC order.
+    if topology.mode != 'one-arm':
+        raise ValueError('Router host initialization is not implemented yet')
+    if linux_platform(config.get('host', {}).get('arch', 'amd64')).arch != 'amd64':
+        raise ValueError('Host initialization currently supports amd64 only; ARM64 artifacts can be built separately')
+    controller = (config['runtime'].get('mihomo', {}).get('external-controller', '127.0.0.1:9090')
+                  if component_enabled(config['runtime'], 'clash') else '127.0.0.1:9090')
+    return {'network': {'address': topology.lan.address, 'gateway': topology.wan.gateway,
+                        'dns': list(topology.wan.dns)}, 'interface': topology.lan.interface,
+            'controller': controller,
+            'tailscale_exit': topology.tailscale_exit}
 
 
 def remote(config, command, content=None, timeout=120):

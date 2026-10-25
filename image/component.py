@@ -3,7 +3,7 @@ import os
 import signal
 import subprocess
 import time
-from network import DATA, read_policy, save_json
+from runtime import DATA, read_policy, save_json
 
 
 class Component:

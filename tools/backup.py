@@ -23,11 +23,16 @@ def inspect_snapshot(body):
         if any(not entry.isfile() or entry.name not in STATE_FILES for entry in entries):
             raise ValueError('Unexpected snapshot contents')
         names = {entry.name for entry in entries}
-        if not {'snapshot.json', 'versions.json', 'config/gateway.yaml', 'data/subscription/current.yaml'} <= names:
+        if not {'snapshot.json', 'versions.json', 'config/gateway.yaml'} <= names:
             raise ValueError('Incomplete snapshot')
         metadata = json.load(archive.extractfile('snapshot.json'))
         if metadata.get('format') != 1:
             raise ValueError('Unsupported snapshot format')
+        components = metadata.get('components', {'clash': True, 'subscription': True})
+        if not isinstance(components, dict) or any(not isinstance(components.get(key), bool) for key in ('clash', 'subscription')):
+            raise ValueError('Invalid snapshot components')
+        if components['clash'] and components['subscription'] and 'data/subscription/current.yaml' not in names:
+            raise ValueError('Incomplete snapshot')
         return metadata, len(entries)
 
 

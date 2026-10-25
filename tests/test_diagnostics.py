@@ -20,7 +20,8 @@ def healthy_status():
             'supervisor_status_fresh': True, 'proxy_routing': {'ready': True},
             'proxy_rules_present': True, 'base_rules_present': True, 'forwarding_enabled': True,
             'source_validation': {'ready': True},
-            'dns_policy': {'vpn_dns_active': True, 'error': None}, 'subscription': {}}
+            'dns_policy': {'vpn_dns_active': True, 'error': None}, 'subscription': {},
+            'network_policy': {'fresh': True, 'state': 'ready'}}
 
 
 class DiagnosticsTests(unittest.TestCase):
@@ -56,6 +57,7 @@ class DiagnosticsTests(unittest.TestCase):
                  ('DNS', {'dns_policy': {'vpn_dns_active': False}}),
                  ('supervisor', {'supervisor_status_fresh': False}),
                  ('base', {'base_rules_present': False}),
+                 ('host policy', {'network_policy': {'fresh': False, 'state': 'ready'}}),
                  ('proxy', {'controller': {'transparent_proxy': True, 'components': {'clash': {}}}, 'proxy_routing': {'ready': False}}),
                  ('source-validation', {'controller': {'transparent_proxy': True, 'components': {'clash': {}}},
                                         'source_validation': {'ready': False}})]

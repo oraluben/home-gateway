@@ -18,7 +18,7 @@ SEED = 'GEZDGNBVGY3TQOJQGEZDGNBVGY3TQOJQ'
 
 class VpnAuthTests(unittest.TestCase):
     def configuration(self):
-        return {'runtime': {'vpn': {}, 'subscription': {}, 'mihomo': {}, 'network': {}},
+        return {'runtime': {'vpn': {}, 'subscription': {}, 'mihomo': {}, 'network': {'interface': 'eth0'}},
                 'vpn_profiles_pass': 'vpn/profiles', 'vpn_profile': 'vpn1',
                 'secrets': {'subscription_url': 'sub', 'controller': 'panel'}}
 

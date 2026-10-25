@@ -3,6 +3,7 @@ import hashlib
 import json
 import pathlib
 import re
+from target_platform import linux_platform
 
 
 def verified_file(folder, name, digest=None):
@@ -16,11 +17,14 @@ def verified_file(folder, name, digest=None):
     return path
 
 
-def selected_build(filename):
+def selected_build(filename, expected_arch=None):
     manifest = pathlib.Path(filename).expanduser().resolve()
     value = json.loads(manifest.read_text())
-    if value.get('format') != 1 or value.get('goos') != 'linux' or value.get('goarch') != 'amd64':
-        raise ValueError('Expected a format-1 Linux amd64 Mihomo build manifest')
+    if value.get('format') != 1 or value.get('goos') != 'linux' or value.get('goarch') not in ('amd64', 'arm64'):
+        raise ValueError('Expected a format-1 Linux amd64/arm64 Mihomo build manifest')
+    platform = linux_platform(value['goarch'])
+    if expected_arch is not None and platform != linux_platform(expected_arch):
+        raise ValueError('Mihomo build architecture differs from the deployment target')
     version, source = value.get('version'), value.get('source') or {}
     if not isinstance(version, str) or not re.fullmatch('[A-Za-z0-9._+-]{1,128}', version):
         raise ValueError('Invalid custom Mihomo version')
@@ -38,13 +42,12 @@ def selected_build(filename):
     folder = manifest.parent
     binary = verified_file(folder, value.get('binary'), value.get('binary_sha256'))
     header = binary.read_bytes()[:20]
-    if header[:6] != b'\x7fELF\x02\x01' or header[18:20] != b'\x3e\x00':
-        raise ValueError('Custom Mihomo binary is not Linux amd64 ELF')
+    platform.verify_elf(header)
     license_path = verified_file(folder, value.get('license'), value['license_sha256'])
     archive = verified_file(folder, source.get('archive'), source.get('sha256'))
     metadata = {'version': version, 'binary_sha256': value['binary_sha256'], 'features': features,
                 'source': {key: source[key] for key in ('repository', 'revision', 'sha256')},
-                'goos': 'linux', 'goarch': 'amd64', 'toolchain': value.get('toolchain'),
+                'goos': 'linux', 'goarch': platform.arch, 'toolchain': value.get('toolchain'),
                 'build_tags': value.get('build_tags', [])}
     return {'metadata': metadata, 'binary': binary, 'license': license_path, 'source': archive}
 

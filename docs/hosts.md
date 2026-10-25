@@ -2,6 +2,8 @@
 
 网关运行环境统一为 Ubuntu 24.04 amd64。`host.backend` 选择 `hyperv` 或 `linux`，共享部署通过 SSH 访问该 Ubuntu 目标，与操作机的系统分开。
 
+网络模型已与宿主类型拆开，支持 LAN/WAN 角色与旧单网口配置互相转换；详见 [architecture.md](architecture.md)。本轮是代码架构调整：双网口主路由的 DHCP/防火墙及完整 ARM64 安装尚未实现，安装器会提前拒绝，不会自动修改网卡配置。
+
 | 层 | 目录 / 入口 | 职责 |
 |---|---|---|
 | 网关核心 | `image/`、`compose.yaml`、基础网络与 DNS 脚本 | 单容器监督、透明代理、VPN、DNS、订阅和状态 |
@@ -57,6 +59,6 @@ python3 tools/gateway.py status
 
 ## 后续平台
 
-KVM 只需新增 QCOW2/桥接/虚拟机生命周期的适配，Ubuntu 环境、镜像与维护工具可继续共用，但目前没有 KVM 自动创建入口。ARM 需要对应架构的固定二进制和构建验证，不能仅更换 cloud image。
+KVM 只需新增 QCOW2/桥接/虚拟机生命周期的适配，Ubuntu 环境、镜像与维护工具可继续共用，但目前没有 KVM 自动创建入口。自定义 Mihomo 构建已支持 `--arch arm64`，清单会按架构校验 ELF 和哈希，部署也会核验产物与所选目标架构相符；ARM 宿主安装、对应默认产物和板级内核验证仍待完成，不能仅更换 cloud image。
 
 现有测试覆盖配置兼容、主机冲突拒绝、初始化重复执行与配置保留。共享初始化与部署已在当前 Hyper-V 的 Ubuntu 环境中验证；独立物理 Linux 主机的首次安装仍需实际设备验证。

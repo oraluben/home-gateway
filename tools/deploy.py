@@ -1,7 +1,6 @@
 """Resolve the explicit operator configuration and deploy only appliance inputs."""
 import argparse
 import base64
-import copy
 import io
 import importlib
 import json
@@ -10,41 +9,19 @@ import subprocess
 import sys
 import tarfile
 import uuid
-from common import ROOT, deployment, json_object, remote, secret, ssh_command, write_operator
+from common import ROOT, deployment, remote, secret, write_operator
 from ssh_access import deployment_access
+from render import render_bundle
 from mihomo_build import selected_build, configure_runtime
+from target_platform import linux_platform
 sys.path.insert(0, str(ROOT / 'image'))
-from vpn_auth import validate_totp
 
 
 def materialize(config):
     access = deployment_access(config.get('connection', {}))
-    runtime = copy.deepcopy(config['runtime'])
-    if config.get('network', {}).get('address'):
-        runtime['network']['address'] = config['network']['address']
-    profiles = (json_object(secret(config['vpn_profiles_pass'])) if config.get('vpn_profiles_pass')
-                else json_object(pathlib.Path(config['vpn_profiles_file']).expanduser().read_text()))
-    if 'profiles_pass' in profiles:
-        profiles = json_object(secret(profiles['profiles_pass']))
-    vpn = profiles[config['vpn_profile']]
-    runtime['vpn'].update(server=vpn['server'], username=vpn['username'])
-    for key in ('password_file', 'token_mode', 'token_file'):
-        runtime['vpn'].pop(key, None)
-    bundle = {'runtime': runtime}
+    bundle = render_bundle(config, secret)
     if access is not None:
         bundle['ssh_access'] = access
-    if vpn.get('credential'):
-        runtime['vpn']['password_file'] = '/config/secrets/vpn-password'
-        bundle['vpn_password'] = secret(vpn['credential'])
-    if vpn.get('token'):
-        if vpn['token'].get('mode') != 'totp':
-            raise ValueError('Only TOTP token profiles are supported')
-        runtime['vpn'].update(token_mode='totp', token_file='/config/secrets/vpn-token')
-        bundle['vpn_token'] = validate_totp(secret(vpn['token']['credential']), vpn['token'].get('encoding'))
-    if not vpn.get('credential') and not vpn.get('token'):
-        raise ValueError('VPN profile requires a password or a TOTP token')
-    runtime['subscription']['url'] = secret(config['secrets']['subscription_url'])
-    runtime['mihomo']['secret'] = secret(config['secrets']['controller'])
     return bundle
 
 
@@ -86,7 +63,10 @@ def main():
     parser.add_argument('--mihomo-build', help='Verified local build.json; default uses the pinned upstream release')
     args = parser.parse_args()
     config = deployment(args.config)
-    build = selected_build(args.mihomo_build or config['mihomo_build']) if args.mihomo_build or config.get('mihomo_build') else None
+    arch = linux_platform(config.get('host', {}).get('arch', 'amd64')).arch
+    build = selected_build(args.mihomo_build or config['mihomo_build'], expected_arch=arch) if args.mihomo_build or config.get('mihomo_build') else None
+    if build is None and arch != 'amd64':
+        raise ValueError('The pinned stock Mihomo artifact is amd64; select a matching custom build')
     # Host changes are explicit and separate from image/configuration deployment.
     report = importlib.import_module('prepare-host').prepare(config)
     if not report['ready']:

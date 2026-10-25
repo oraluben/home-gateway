@@ -1,64 +1,16 @@
-import ipaddress
+"""Linux kernel operations; network intent and rule rendering are side-effect free."""
 import json
-import os
-import pathlib
-import re
 import subprocess
+from firewall import (MARK, TAILSCALE_INTERFACE,
+                      tailscale_exit_enabled, render_base, render_proxy)
 
-from runtime import DATA
-# Leave Tailscale's reserved bits 16:23 clear, including its connmark rules.
-MARK = '0x7001'
 TABLE = '17001'
 RULE_PRIORITY = '17001'
-TAILSCALE_INTERFACE = 'tailscale0'
-TAILSCALE_CLIENTS = '100.64.0.0/10'
-
-
-def tailscale_exit_enabled(config):
-    value = config['network'].get('tailscale_exit', False)
-    if not isinstance(value, bool):
-        raise ValueError('network.tailscale_exit must be a boolean')
-    return value
 
 
 def run(args, check=True, input=None):
     return subprocess.run(args, input=input, text=True, capture_output=True,
                           timeout=25, check=check)
-
-
-def read_policy():
-    try:
-        return json.loads((DATA / 'vpn-policy.json').read_text())
-    except (FileNotFoundError, json.JSONDecodeError):
-        return {'up': False, 'prefixes': [], 'dns': [], 'domains': []}
-
-
-def save_json(path, value):
-    temporary = path.with_suffix('.tmp')
-    temporary.write_text(json.dumps(value, indent=2) + '\n')
-    temporary.replace(path)
-
-
-def validated_networks(values):
-    return sorted({str(ipaddress.IPv4Network(v, strict=False)) for v in values})
-
-
-def interface_name(value):
-    if not re.fullmatch(r'[a-zA-Z0-9_.-]{1,15}', value):
-        raise ValueError('Invalid network interface name')
-    return value
-
-
-def controller_listener(config):
-    host, separator, port = config['mihomo'].get('external-controller', '127.0.0.1:9090').rpartition(':')
-    address = ipaddress.IPv4Address(host)
-    port = int(port)
-    if not separator or not 1 <= port <= 65535 or address.is_unspecified or address.is_multicast:
-        raise ValueError('The controller must bind to a specific IPv4 address and valid port')
-    secret = config['mihomo'].get('secret')
-    if not address.is_loopback and (not isinstance(secret, str) or not secret.strip()):
-        raise ValueError('A LAN controller requires an access key')
-    return str(address), port
 
 
 def replace_table(name, definition):
@@ -71,42 +23,7 @@ def replace_table(name, definition):
 
 
 def apply_base(config, policy):
-    lan = interface_name(config['network']['interface'])
-    vpn = interface_name(config['vpn']['interface'])
-    clients = ', '.join(validated_networks(config['network']['clients']))
-    corporate = ', '.join(validated_networks(policy.get('prefixes', []) +
-                                            [x + '/32' for x in policy.get('dns', [])]))
-    corporate_elements = f'elements = {{ {corporate} }};' if corporate else ''
-    controller_address, controller_port = controller_listener(config)
-    remote_guard = remote_nat = ipv6_guard = ''
-    if tailscale_exit_enabled(config):
-        remote_guard = f'    iifname "{TAILSCALE_INTERFACE}" ip saddr {TAILSCALE_CLIENTS} ip daddr @corporate oifname != "{vpn}" counter reject with icmp type admin-prohibited\n'
-        remote_nat = f'    iifname "{TAILSCALE_INTERFACE}" ip saddr {TAILSCALE_CLIENTS} oifname {{ "{lan}", "{vpn}" }} counter masquerade\n'
-        # The appliance currently supports IPv4 only. Reject immediately so dual
-        # stack clients can fall back; never send IPv6 around Mihomo/corporate policy.
-        ipv6_guard = f'    iifname "{TAILSCALE_INTERFACE}" meta nfproto ipv6 counter reject with icmpv6 type no-route\n'
-    controller_guard = '' if ipaddress.IPv4Address(controller_address).is_loopback else f'''
-  chain controller_guard {{
-    type filter hook input priority -5; policy accept;
-    ip daddr {controller_address} tcp dport {controller_port} iifname "lo" accept
-    ip daddr {controller_address} tcp dport {controller_port} iifname "{lan}" ip saddr @clients accept
-    ip daddr {controller_address} tcp dport {controller_port} counter reject with tcp reset
-  }}'''
-    replace_table('home_gateway_base', f'''table inet home_gateway_base {{
-  set clients {{ type ipv4_addr; flags interval; auto-merge; elements = {{ {clients} }}; }}
-  set corporate {{ type ipv4_addr; flags interval; auto-merge; {corporate_elements} }}
-{controller_guard}
-  chain forward_guard {{
-    type filter hook forward priority -5; policy accept;
-    ip saddr @clients ip daddr @corporate oifname != "{vpn}" counter reject with icmp type admin-prohibited
-{remote_guard}{ipv6_guard}\
-  }}
-  chain source_nat {{
-    type nat hook postrouting priority srcnat; policy accept;
-    ip saddr @clients oifname {{ "{lan}", "{vpn}" }} counter masquerade
-{remote_nat}\
-  }}
-}}\n''')
+    replace_table('home_gateway_base', render_base(config, policy))
 
 
 def proxy_off():
@@ -164,27 +81,6 @@ def ensure_proxy_routing():
 
 
 def proxy_on(config, policy):
-    lan = interface_name(config['network']['interface'])
-    clients = ', '.join(validated_networks(config['network']['clients']))
-    corporate = ', '.join(validated_networks(policy.get('prefixes', []) +
-                                            [x + '/32' for x in policy.get('dns', [])]))
-    corporate_elements = f'elements = {{ {corporate} }};' if corporate else ''
-    remote_divert = (f'    iifname "{TAILSCALE_INTERFACE}" ip saddr {TAILSCALE_CLIENTS} counter jump proxy\n'
-                     if tailscale_exit_enabled(config) else '')
+    definition = render_proxy(config, policy)
     ensure_proxy_routing()
-    replace_table('home_gateway_proxy', f'''table inet home_gateway_proxy {{
-  set clients {{ type ipv4_addr; flags interval; auto-merge; elements = {{ {clients} }}; }}
-  set corporate {{ type ipv4_addr; flags interval; auto-merge; {corporate_elements} }}
-  chain divert {{
-    type filter hook prerouting priority -140; policy accept;
-    iifname "{lan}" ip saddr @clients jump proxy
-{remote_divert}\
-  }}
-  chain proxy {{
-    fib daddr type local return
-    ip daddr @corporate return
-    ip daddr {{ 0.0.0.0/8, 10.0.0.0/8, 100.64.0.0/10, 127.0.0.0/8, 169.254.0.0/16, 172.16.0.0/12, 192.168.0.0/16, 224.0.0.0/4, 240.0.0.0/4 }} return
-    meta l4proto {{ tcp, udp }} th dport 53 return
-    meta l4proto {{ tcp, udp }} counter tproxy ip to 127.0.0.1:7893 meta mark set {MARK} accept
-  }}
-}}\n''')
+    replace_table('home_gateway_proxy', definition)

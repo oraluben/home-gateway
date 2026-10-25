@@ -4,15 +4,15 @@ import pathlib
 import re
 import yaml
 from ssh_access import seed_keys
+from common import deployment_topology, host_inputs
 
 
 def write_seed(config, mac_address, destination):
     if not re.fullmatch(r'[0-9a-fA-F]{12}', mac_address):
         raise ValueError('Expected a twelve-digit MAC address')
-    interface = config['runtime']['network']['interface']
-    if not re.fullmatch(r'[a-zA-Z0-9_.-]{1,15}', interface):
-        raise ValueError('Invalid network interface name')
-    network = config['network']
+    topology = deployment_topology(config)
+    interface = topology.lan.interface
+    network = host_inputs(config)['network']
     ipaddress.IPv4Interface(network['address'])
     ipaddress.IPv4Address(network['gateway'])
     connection = config['connection']

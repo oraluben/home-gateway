@@ -1,5 +1,18 @@
 #!/bin/bash
 set -euo pipefail
+if ! python3 - <<'PY'
+import sys
+sys.path.insert(0, '/opt/home-gateway/image')
+import yaml
+from topology import component_enabled
+with open('/opt/home-gateway/config/gateway.yaml') as stream:
+    config = yaml.safe_load(stream)
+raise SystemExit(0 if component_enabled(config, 'clash') and component_enabled(config, 'subscription', False) else 1)
+PY
+then
+    systemctl disable --now home-gateway-subscription.timer 2>/dev/null || true
+    exit 0
+fi
 interval=$(python3 - <<'PY'
 import pathlib
 import yaml

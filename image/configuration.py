@@ -1,12 +1,14 @@
 import copy
 import yaml
-from network import DATA, controller_listener, tailscale_exit_enabled
+from runtime import DATA
+from firewall import controller_listener
+from topology import Topology
 
 SUBSCRIPTION_SECTIONS = ('proxies', 'proxy-groups', 'rules', 'proxy-providers', 'rule-providers')
 
 
 def render_mihomo(config, subscription=None):
-    tailscale_exit_enabled(config)
+    topology = Topology.parse(config['network'])
     mihomo = {}
     if config.get('subscription', {}).get('enabled', False):
         if subscription is None:
@@ -33,7 +35,7 @@ def render_mihomo(config, subscription=None):
     address, port = controller_listener(config)
     mihomo['external-controller'] = f'{address}:{port}'
     mihomo['log-level'] = 'info'
-    mihomo['interface-name'] = config['network']['interface']
+    mihomo['interface-name'] = topology.wan.interface
     mihomo.setdefault('profile', {})['store-selected'] = True
     mihomo['sniffer'] = {'enable': True, 'parse-pure-ip': True, 'override-destination': True,
                          'sniff': {'HTTP': {'ports': [80, '8080-8880'], 'override-destination': True},

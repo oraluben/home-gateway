@@ -10,8 +10,8 @@ ROOT = pathlib.Path(__file__).resolve().parent
 sys.path.insert(0, str(ROOT / 'image'))
 os.environ['HOME_GATEWAY_DATA'] = str(ROOT / 'data')
 os.environ.setdefault('HOME_GATEWAY_CONFIG', str(ROOT / 'config/gateway.yaml'))
-from network import read_policy, save_json
-from runtime import DATA, load_config
+from runtime import DATA, load_config, read_policy, save_json, effective_policy
+from topology import Topology
 from tailscale_policy import desired_routes
 
 
@@ -23,7 +23,8 @@ def preferences():
 
 
 def main():
-    if not load_config()['network'].get('tailscale_exit', False):
+    config = load_config()
+    if not Topology.parse(config['network']).tailscale_exit:
         return
     previous = None
     attempts = 0
@@ -31,7 +32,7 @@ def main():
     while True:
         try:
             prefs = preferences()
-            routes = desired_routes(read_policy(), prefs)
+            routes = desired_routes(effective_policy(config, read_policy(config=config)), prefs)
             key = tuple(routes)
             if key != previous:
                 previous, attempts, retry_at = key, 0, 0
