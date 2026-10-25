@@ -22,7 +22,8 @@ CREATE TABLE samples (
  id INTEGER PRIMARY KEY, token TEXT NOT NULL UNIQUE, core TEXT NOT NULL,
  time_ms INTEGER NOT NULL, start_ms INTEGER NOT NULL, mono_ns INTEGER NOT NULL,
  upload_total INTEGER NOT NULL, download_total INTEGER NOT NULL,
- upload INTEGER, download INTEGER, flags TEXT NOT NULL
+ upload INTEGER, download INTEGER, flags TEXT NOT NULL,
+ history_instance TEXT, history_sequence INTEGER, history_start_ms INTEGER
 );
 CREATE INDEX samples_time ON samples(time_ms);
 CREATE TABLE usage (
@@ -38,7 +39,7 @@ CREATE TABLE checkpoints (
  seen_ms INTEGER NOT NULL, mono_ns INTEGER NOT NULL
 ) WITHOUT ROWID;
 CREATE INDEX checkpoints_seen ON checkpoints(seen_ms);
-PRAGMA user_version=1;
+PRAGMA user_version=2;
 """
 GROUPS = {'host': "COALESCE(NULLIF(a.host,''),NULLIF(a.destination,''),'unknown')",
           'outbound': "COALESCE(NULLIF(a.outbound,''),'unknown')",
@@ -114,7 +115,12 @@ class Ledger:
             if self.db.execute("SELECT count(*) FROM sqlite_master WHERE type='table'").fetchone()[0]:
                 raise ValueError('Unrecognized usage database')
             self.db.executescript('BEGIN;\n' + SCHEMA + '\nCOMMIT;')
-        elif version != 1:
+        elif version == 1:
+            self.db.executescript('BEGIN; ALTER TABLE samples ADD COLUMN history_instance TEXT; '
+                                 'ALTER TABLE samples ADD COLUMN history_sequence INTEGER; '
+                                 'ALTER TABLE samples ADD COLUMN history_start_ms INTEGER; '
+                                 'PRAGMA user_version=2; COMMIT;')
+        elif version != 2:
             raise ValueError('Unsupported usage database version')
         page_size = self.db.execute('PRAGMA page_size').fetchone()[0]
         self.db.execute('PRAGMA max_page_count=' + str(max(128, max_bytes // page_size)))
@@ -130,7 +136,21 @@ class Ledger:
         self.reset_checkpoints = False
         self.run_id, self.sequence = uuid.uuid4().hex, 0
         self.last_commit_ms = row['time_ms'] if row else None
+        self.committed_history_instance = row['history_instance'] if row else None
         self.failed = False
+        self.retention_hours = 48
+
+    @property
+    def history_cursor(self):
+        return (self.previous or {}).get('history_sequence') or 0
+
+    def checkpoint(self, key):
+        value = self.connections.get(key) or self.dirty.get(key)
+        if value is None and not self.reset_checkpoints:
+            row = self.db.execute('SELECT * FROM checkpoints WHERE key=?', (key,)).fetchone()
+            if row:
+                value = Checkpoint(row['upload'], row['download'], row['seen_ms'], row['mono_ns'])
+        return value
 
     def close(self):
         self.db.close()
@@ -163,6 +183,31 @@ class Ledger:
         previous = self.previous
         initial, changed = previous is None, previous is not None and previous['core'] != core
         flags = set()
+        history = snapshot.get('history')
+        enabled = isinstance(history, dict) and history.get('enabled') is True
+        history_instance = history_sequence = history_start = None
+        closed_items = []
+        if enabled:
+            history_instance = history.get('instance')
+            if not isinstance(history_instance, str) or not history_instance or len(history_instance) > 128:
+                raise ValueError('Invalid history instance')
+            history_sequence = integer(history.get('nextSequence'))
+            latest = integer(history.get('latestSequence'))
+            closed_items = history.get('records')
+            if not isinstance(closed_items, list) or len(closed_items) > 4096 or history_sequence > latest:
+                raise ValueError('Invalid history page')
+            if previous and previous.get('history_instance') == history_instance and not changed:
+                history_start = previous.get('history_start_ms')
+                if history_sequence < (previous.get('history_sequence') or 0):
+                    raise ValueError('Regressing history cursor')
+            else:
+                history_start = 0 if changed else (previous['time_ms'] if previous else wall_ms)
+                if previous and not changed:
+                    flags.add('history_changed')
+            if history.get('lost') or history.get('reset'):
+                flags.add('history_lost')
+            if history_sequence < latest:
+                flags.add('history_backlog')
         start = previous['time_ms'] if previous else wall_ms
         elapsed = (mono_ns - previous['mono_ns']) / 1e6 if previous and not changed else None
         gap = bool(previous and (changed or elapsed < 0 or elapsed > 1800))
@@ -187,15 +232,17 @@ class Ledger:
         if gap:
             flags.add('gap')
         merged, unique = defaultdict(lambda: [0, 0]), {}
-        for item in items:
+        for item, is_closed in [(item, False) for item in items] + [(item, True) for item in closed_items]:
             try:
                 if not isinstance(item, dict):
                     raise ValueError('Invalid connection')
                 metadata = item.get('metadata') or {}
                 if not isinstance(metadata, dict):
                     raise ValueError('Invalid metadata')
-                if text(metadata.get('type')).lower() == 'inner':
+                if item.get('counted') is False or (item.get('counted') is None and text(metadata.get('type')).lower() == 'inner'):
                     continue
+                if is_closed and type(item.get('counted')) is not bool:
+                    raise ValueError('History record has no accounting scope')
                 identifier, stamp = item.get('id'), item.get('start')
                 if not isinstance(identifier, str) or not identifier or len(identifier) > 128:
                     raise ValueError('Invalid connection ID')
@@ -203,17 +250,20 @@ class Ledger:
                 up, down = integer(item.get('upload')), integer(item.get('download'))
                 key = json.dumps((core, identifier, stamp), separators=(',', ':'))
                 values = attribution(item)
+                first_close = is_closed and integer(item.get('revision')) == 1
                 if key in unique:
-                    flags.add('duplicate_connection')
                     old = unique[key]
-                    if old[3] != values:
-                        raise ValueError('Conflicting connection metadata')
+                    if not is_closed and not old[4]:
+                        flags.add('duplicate_connection')
+                        if old[3] != values:
+                            raise ValueError('Conflicting connection metadata')
                     up, down = max(up, old[0]), max(down, old[1])
-                unique[key] = (up, down, born, values)
+                    is_closed, first_close = is_closed or old[4], first_close or old[5]
+                unique[key] = (up, down, born, values, is_closed, first_close)
             except (ValueError, TypeError, OverflowError):
                 flags.add('invalid_connection')
-        for key, (up, down, born, values) in unique.items():
-            old = self.connections.get(key)
+        for key, (up, down, born, values, is_closed, first_close) in unique.items():
+            old = self.checkpoint(key)
             if old:
                 du, dd = max(0, up - old.upload), max(0, down - old.download)
                 if up < old.upload or down < old.download:
@@ -223,9 +273,12 @@ class Ledger:
                 high_up, high_down = max(up, old.upload), max(down, old.download)
             else:
                 # Unknown old connections may be evicted tombstones; never recount their lifetime.
-                count = not initial and (changed or (not clock_jump and born >= start))
+                threshold = max(history_start or 0, wall_ms - self.retention_hours * 3600000)
+                known_lifetime = is_closed and first_close and enabled and born >= threshold
+                count = not initial and (changed or (not clock_jump and (known_lifetime or (not is_closed and born >= start))))
                 du, dd = (up, down) if count else (0, 0)
-                since, recovered = (start if count else wall_ms), gap or clock_jump
+                since = (born if is_closed else start) if count else wall_ms
+                recovered = gap or clock_jump or (is_closed and wall_ms - since > 1800)
                 high_up, high_down = up, down
                 if not initial and not changed and not count:
                     flags.add('late_connection_baseline')
@@ -233,14 +286,16 @@ class Ledger:
             self.connections[key] = self.dirty[key] = checkpoint
             if du or dd:
                 dimension = self.dimension(values)
-                target = merged[(dimension, since, 'recovered' if recovered else 'normal')]
+                quality = ('closed-recovered' if recovered else 'closed') if is_closed else ('recovered' if recovered else 'normal')
+                target = merged[(dimension, since, quality)]
                 target[0] += du
                 target[1] += dd
         self.sequence += 1
         sample = dict(id=self.next_id, token=f'{self.run_id}:{self.sequence}', core=core,
                       time_ms=wall_ms, start_ms=start, mono_ns=mono_ns, upload_total=upload,
                       download_total=download, upload=global_up, download=global_down,
-                      flags=json.dumps(sorted(flags)))
+                      flags=json.dumps(sorted(flags)), history_instance=history_instance,
+                      history_sequence=history_sequence, history_start_ms=history_start)
         self.next_id += 1
         self.samples.append(sample)
         self.rows.extend((sample['id'], dimension, since, quality, up, down)
@@ -265,7 +320,7 @@ class Ledger:
             self.db.execute('BEGIN IMMEDIATE')
             self.db.executemany('INSERT INTO attribution VALUES (' + ','.join('?' * 13) + ')', self.attributes.values())
             fields = ('id', 'token', 'core', 'time_ms', 'start_ms', 'mono_ns', 'upload_total',
-                      'download_total', 'upload', 'download', 'flags')
+                      'download_total', 'upload', 'download', 'flags', 'history_instance', 'history_sequence', 'history_start_ms')
             self.db.executemany('INSERT INTO samples VALUES (' + ','.join('?' * len(fields)) + ')',
                                 [tuple(sample[name] for name in fields) for sample in self.samples])
             self.db.executemany('INSERT INTO usage VALUES (?,?,?,?,?,?)', self.rows)
@@ -283,6 +338,7 @@ class Ledger:
                 self.db.execute('ROLLBACK')
             raise
         self.last_commit_ms = self.samples[-1]['time_ms']
+        self.committed_history_instance = self.samples[-1]['history_instance']
         self.attributes.clear()
         self.samples.clear()
         self.rows.clear()
@@ -298,14 +354,13 @@ class Ledger:
             self.db.execute('BEGIN IMMEDIATE')
             self.db.execute('DELETE FROM samples WHERE id IN (SELECT id FROM samples WHERE time_ms<? '
                             'AND id<>(SELECT max(id) FROM samples) ORDER BY id LIMIT 1000)', (cutoff,))
-            self.db.execute('DELETE FROM checkpoints WHERE seen_ms<?', (now_ms - 3600000,))
-            self.db.execute('DELETE FROM checkpoints WHERE key IN (SELECT key FROM checkpoints '
-                            'ORDER BY seen_ms DESC LIMIT -1 OFFSET 50000)')
+            self.db.execute('DELETE FROM checkpoints WHERE seen_ms<?', (cutoff,))
             self.db.execute('DELETE FROM attribution WHERE id IN (SELECT a.id FROM attribution a '
                             'WHERE NOT EXISTS(SELECT 1 FROM usage u WHERE u.attribution_id=a.id) LIMIT 1000)')
         self.cache.clear()
         self.connections = {key: value for key, value in self.connections.items()
-                            if value.seen_ms >= now_ms - 3600000}
+                            if value.seen_ms >= cutoff}
+        self.retention_hours = retention_hours
 
 
 def duration(value):
@@ -340,16 +395,18 @@ def report(path, *, since='1h', group_by='host', proxy_only=False, limit=20, buc
         base = ' FROM usage u JOIN samples s ON s.id=u.sample_id JOIN attribution a ON a.id=u.attribution_id WHERE ' + filters
         observed = dict(db.execute('SELECT COALESCE(sum(CASE WHEN u.start_ms>=? THEN u.upload ELSE 0 END),0) AS upload,'
                       'COALESCE(sum(CASE WHEN u.start_ms>=? THEN u.download ELSE 0 END),0) AS download,'
-                      "COALESCE(sum(CASE WHEN u.start_ms>=? AND u.quality='recovered' THEN u.upload ELSE 0 END),0) AS recovered_upload,"
-                      "COALESCE(sum(CASE WHEN u.start_ms>=? AND u.quality='recovered' THEN u.download ELSE 0 END),0) AS recovered_download,"
+                      "COALESCE(sum(CASE WHEN u.start_ms>=? AND u.quality IN ('recovered','closed-recovered') THEN u.upload ELSE 0 END),0) AS recovered_upload,"
+                      "COALESCE(sum(CASE WHEN u.start_ms>=? AND u.quality IN ('recovered','closed-recovered') THEN u.download ELSE 0 END),0) AS recovered_download,"
+                      "COALESCE(sum(CASE WHEN u.start_ms>=? AND u.quality IN ('closed','closed-recovered') THEN u.upload ELSE 0 END),0) AS closed_upload,"
+                      "COALESCE(sum(CASE WHEN u.start_ms>=? AND u.quality IN ('closed','closed-recovered') THEN u.download ELSE 0 END),0) AS closed_download,"
                       'COALESCE(sum(CASE WHEN u.start_ms<? THEN u.upload+u.download ELSE 0 END),0) AS boundary_bytes'
-                      + base, (cutoff,) * 5 + (cutoff, end)).fetchone())
+                      + base, (cutoff,) * 7 + (cutoff, end)).fetchone())
         expression = f'(s.time_ms/{bucket_seconds * 1000})*{bucket_seconds * 1000}' if group_by == 'time' else GROUPS[group_by]
-        selected = base + ' AND u.start_ms>=?' + (" AND u.quality='normal'" if group_by == 'time' else '')
+        selected = base + ' AND u.start_ms>=?' + (" AND u.quality IN ('normal','closed')" if group_by == 'time' else '')
         order = 'label DESC' if group_by == 'time' else '(sum(u.upload)+sum(u.download)) DESC,label'
         groups = [dict(row) for row in db.execute('SELECT ' + expression + ' AS label,sum(u.upload) AS upload,'
                   'sum(u.download) AS download,'
-                  "sum(CASE WHEN u.quality='recovered' THEN u.upload+u.download ELSE 0 END) AS recovered_bytes"
+                  "sum(CASE WHEN u.quality IN ('recovered','closed-recovered') THEN u.upload+u.download ELSE 0 END) AS recovered_bytes"
                   + selected + ' GROUP BY label ORDER BY ' + order + ' LIMIT ?', (cutoff, end, cutoff, limit))]
         return {'since': since, 'group_by': group_by, 'proxy_only': proxy_only, 'global': totals,
                 'observed': observed, 'groups': groups,
@@ -389,4 +446,5 @@ def print_report(value):
         print(f"{format_bytes(row['upload']):<14} {format_bytes(row['download']):<14} {label}")
     print('Recovered interval bytes: ' + format_bytes(observed['recovered_upload'] + observed['recovered_download'])
           + '; excluded boundary bytes: ' + format_bytes(observed['boundary_bytes']))
+    print('Reconciled from close summaries: ' + format_bytes(observed['closed_upload'] + observed['closed_download']))
     print('Sampled attribution can miss short connections/tails; global and detail are separate views.')

@@ -1,8 +1,10 @@
 import importlib.util
+from contextlib import closing
 import hashlib
 import io
 import json
 import pathlib
+import sqlite3
 import sys
 import tarfile
 import tempfile
@@ -36,6 +38,22 @@ def snapshot(extra=None):
 
 
 class PersistenceTests(unittest.TestCase):
+    def test_usage_database_backup_and_rollback_restore_the_original_schema(self):
+        with tempfile.TemporaryDirectory() as directory:
+            data = pathlib.Path(directory) / 'data'
+            backup = pathlib.Path(directory) / 'backup'
+            data.mkdir()
+            backup.mkdir()
+            with closing(sqlite3.connect(data / 'usage.sqlite3')) as db:
+                db.executescript('CREATE TABLE counter(value INTEGER); INSERT INTO counter VALUES(42); PRAGMA user_version=1;')
+            installer.snapshot_usage(data, backup)
+            with closing(sqlite3.connect(data / 'usage.sqlite3')) as db:
+                db.executescript('UPDATE counter SET value=99; PRAGMA user_version=2;')
+            installer.restore_usage(data, backup, True)
+            with closing(sqlite3.connect(data / 'usage.sqlite3')) as db:
+                self.assertEqual(db.execute('SELECT value FROM counter').fetchone()[0], 42)
+                self.assertEqual(db.execute('PRAGMA user_version').fetchone()[0], 1)
+
     def test_restore_rejects_traversal_and_unexpected_credentials(self):
         for name in ('../outside', '/etc/shadow', 'config/other-secret', 'data/logs/vpn.log'):
             with self.subTest(name=name), self.assertRaises(ValueError):

@@ -44,7 +44,8 @@ def usage_status():
 
 
 def print_usage_status(value):
-    print(f"Usage: {value['state']}; {'fresh' if value['fresh'] else 'stale or missing'}; "
+    print(f"Usage: {value['state']}; mode: {value.get('mode', 'sampling')}; "
+          f"history gaps: {value.get('history_gaps', 0)}; {'fresh' if value['fresh'] else 'stale or missing'}; "
           f"last commit: {value.get('last_commit_ms')}; database bytes: {value['database_bytes']}")
     if value.get('error'):
         print('Collector error: ' + value['error'] + '; use logs-usage / retry-usage')
@@ -76,6 +77,7 @@ def status():
     route_age = round(time.time() - route_path.stat().st_mtime, 1) if remote_exit and route_path.exists() else None
     # Subscription URLs, configuration, passwords and controller keys are never returned.
     return {'version': receipt.get('version'), 'container': 'running',
+            'mihomo_build': {key: receipt.get('mihomo', {}).get(key) for key in ('version', 'binary_sha256', 'features', 'source')},
             'addresses': json.loads(addresses.stdout) if addresses.returncode == 0 else [],
             'controller': controller, 'status_age_seconds': age,
             'supervisor_status_fresh': age is not None and -5 <= age < 10,

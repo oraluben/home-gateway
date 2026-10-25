@@ -43,6 +43,7 @@ class Controller:
     def __init__(self, config):
         self.host, self.port = controller_listener(config)
         self.secret = config['mihomo'].get('secret', '')
+        self.require_history = config.get('usage', {}).get('require_history', False)
         self.connection = None
 
     def close(self):
@@ -50,12 +51,21 @@ class Controller:
             self.connection.close()
             self.connection = None
 
-    def snapshot(self):
+    def close_connections(self):
+        self.connection = http.client.HTTPConnection(self.host, self.port, timeout=1.5)
+        headers = {'Authorization': 'Bearer ' + self.secret} if self.secret else {}
+        self.connection.request('DELETE', '/connections', headers=headers)
+        response = self.connection.getresponse()
+        response.read(4096)
+        if response.status != 204:
+            raise ControllerError(f'HTTP_{response.status}', 'Connection drain failed')
+
+    def snapshot(self, after=0):
         if self.connection is None:
             self.connection = http.client.HTTPConnection(self.host, self.port, timeout=1.5)
         try:
             headers = {'Authorization': 'Bearer ' + self.secret} if self.secret else {}
-            self.connection.request('GET', '/connections', headers=headers)
+            self.connection.request('GET', f'/connections?history=true&after={after}&limit=4096', headers=headers)
             response = self.connection.getresponse()
             if response.status != 200:
                 raise ControllerError(f'HTTP_{response.status}', f'Controller HTTP {response.status}')
@@ -72,6 +82,8 @@ class Controller:
             result = json.loads(b''.join(chunks))
             if not isinstance(result, dict):
                 raise ValueError('Invalid controller response')
+            if self.require_history and not (result.get('history') or {}).get('enabled'):
+                raise ControllerError('history_unavailable', 'Connection history is required by the selected build')
             return result
         except Exception:
             self.close()
@@ -93,6 +105,7 @@ def main():
     if shutil.disk_usage(DATA).free < 64 * 1024 * 1024:
         raise OSError('Insufficient space for usage accounting')
     ledger = Ledger(DATA / 'usage.sqlite3', max_bytes=budget * 1024 * 1024)
+    ledger.retention_hours = retention
     controller = Controller(config)
     stopping = False
 
@@ -105,27 +118,37 @@ def main():
     state = {'state': 'starting', 'pid': os.getpid(), 'last_success_ms': None,
              'last_commit_ms': ledger.last_commit_ms, 'errors': 0, 'sample_ms': None,
              'retention_hours': retention, 'max_mib': budget, 'flags': []}
+    state.update(mode='starting', history_sequence=ledger.history_cursor, history_gaps=0)
 
     def publish():
         state['updated_ms'] = int(time.time() * 1000)
         state['last_commit_ms'] = ledger.last_commit_ms
+        state['committed_history_instance'] = ledger.committed_history_instance
         save_json(DATA / 'usage-status.json', state)
+
+    def sample_once():
+        began = time.monotonic()
+        before = core_identity()
+        after = ledger.history_cursor if (ledger.previous or {}).get('core') == before else 0
+        snapshot = controller.snapshot(after)
+        if before != core_identity():
+            raise OSError('Mihomo changed during sampling')
+        wall, mono = int(time.time() * 1000), time.monotonic_ns()
+        flags = ledger.ingest(snapshot, before, wall, mono)
+        state.update(state='running', last_success_ms=wall, flags=flags,
+                     sample_ms=round((time.monotonic() - began) * 1000, 2), error=None)
+        history_enabled = (snapshot.get('history') or {}).get('enabled') is True
+        state.update(mode='close-history' if history_enabled else 'sampling', history_sequence=ledger.history_cursor,
+                     history_instance=(snapshot.get('history') or {}).get('instance'),
+                     history_gaps=state['history_gaps'] + int('history_lost' in flags or 'history_changed' in flags))
 
     tick = commit = maintenance = time.monotonic()
     failures, last_publish = 0, 0
     try:
         publish()
         while not stopping:
-            began = time.monotonic()
             try:
-                before = core_identity()
-                snapshot = controller.snapshot()
-                if before != core_identity():
-                    raise OSError('Mihomo changed during sampling')
-                wall, mono = int(time.time() * 1000), time.monotonic_ns()
-                flags = ledger.ingest(snapshot, before, wall, mono)
-                state.update(state='running', last_success_ms=wall, flags=flags,
-                             sample_ms=round((time.monotonic() - began) * 1000, 2), error=None)
+                sample_once()
                 failures = 0
             except (OSError, ValueError, http.client.HTTPException) as error:
                 # Error messages/HTTP bodies may contain credentials: only publish the class.
@@ -151,6 +174,10 @@ def main():
                 tick = now + interval  # Never issue bursts to catch up missed ticks.
             while not stopping and time.monotonic() < tick:
                 time.sleep(min(0.2, max(0, tick - time.monotonic())))
+        try:
+            sample_once()  # Include summaries drained by the appliance supervisor before shutdown.
+        except (OSError, ValueError, http.client.HTTPException) as error:
+            state.update(error=error_name(error), errors=state['errors'] + 1)
         ledger.flush()
         state['state'] = 'stopped'
         publish()

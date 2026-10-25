@@ -1,10 +1,15 @@
 [CmdletBinding()]
-param([switch]$ValidateOnly, [string]$Restore, [switch]$Rebuild,
+param([switch]$ValidateOnly, [string]$Restore, [switch]$Rebuild, [string]$MihomoBuild,
       [string]$DeploymentPath = (Join-Path $env:USERPROFILE '.config\home-gateway\deployment.json'))
 . (Join-Path $PSScriptRoot 'Get-GatewayConfig.ps1') -DeploymentPath $DeploymentPath
 $arguments = @()
 if ($ValidateOnly) { $arguments += '--validate-only' }
 if ($Rebuild) { $arguments += '--rebuild' }
+if ($MihomoBuild) {
+    $buildPath = & wsl.exe @wslSelection --exec wslpath -a ($MihomoBuild.Replace('\','/'))
+    if ($LASTEXITCODE -ne 0) { throw 'Could not resolve the Mihomo build manifest path.' }
+    $arguments += @('--mihomo-build', $buildPath.Trim())
+}
 if ($Restore) {
     $restorePath = & wsl.exe @wslSelection --exec wslpath -a ($Restore.Replace('\','/'))
     if ($LASTEXITCODE -ne 0) { throw 'Could not resolve the restore file path.' }

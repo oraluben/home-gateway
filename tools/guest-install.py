@@ -1,6 +1,7 @@
 """Root-side transaction: build/validate first, then replace code and configuration."""
 import argparse
 import base64
+from contextlib import closing
 import datetime
 import hashlib
 import importlib
@@ -9,6 +10,7 @@ import json
 import os
 import pathlib
 import shutil
+import sqlite3
 import subprocess
 import sys
 import tarfile
@@ -43,6 +45,29 @@ def write_vpn_secrets(stage, bundle):
     for key, name in (('vpn_password', 'vpn-password'), ('vpn_token', 'vpn-token')):
         if key in bundle:
             write(stage / 'config/secrets' / name, (bundle[key] + '\n').encode())
+
+
+def snapshot_usage(data, backup):
+    source = data / 'usage.sqlite3'
+    if source.exists():
+        with closing(sqlite3.connect(source.resolve().as_uri() + '?mode=ro', uri=True)) as current:
+            with closing(sqlite3.connect(backup / 'usage.sqlite3')) as target:
+                current.backup(target)
+        (backup / 'usage.sqlite3').chmod(0o600)
+
+
+def restore_usage(data, backup, existed):
+    saved = backup / 'usage.sqlite3'
+    if saved.exists() or not existed:
+        # The owning gateway container has already stopped before rollback.
+        for suffix in ('-wal', '-shm'):
+            (data / ('usage.sqlite3' + suffix)).unlink(missing_ok=True)
+        if saved.exists():
+            temporary = data / 'usage.sqlite3.restore'
+            shutil.copy2(saved, temporary)
+            temporary.replace(data / 'usage.sqlite3')
+        else:
+            (data / 'usage.sqlite3').unlink(missing_ok=True)
 
 
 def image_recipe(project):
@@ -206,8 +231,10 @@ def main():
                 target.parent.mkdir(parents=True, exist_ok=True)
                 shutil.copy2(PROJECT / name, target)
         PHASE = 'apply'
-        subprocess.run(['systemctl', 'stop', 'home-gateway'], capture_output=True, timeout=45)
+        usage_existed = (data / 'usage.sqlite3').exists()
         try:
+            run(['systemctl', 'stop', 'home-gateway'], timeout=45)
+            snapshot_usage(data, backup)
             for path in files:
                 shutil.copy2(path, PROJECT / path.name)
             for directory in ('image', 'config'):
@@ -241,7 +268,15 @@ def main():
                 recent = (data / 'status.json').exists() and time.time() - (data / 'status.json').stat().st_mtime < 3
                 proxy_ready = not config['clash'].get('enabled', True) or status.get('transparent_proxy')
                 vpn_ready = not config['vpn'].get('enabled', True) or status.get('vpn_connected')
-                if recent and proxy_ready and vpn_ready:
+                usage_ready = True
+                if config.get('usage', {}).get('require_history') and config.get('usage', {}).get('enabled', True):
+                    usage_status = json.loads((data / 'usage-status.json').read_text()) if (data / 'usage-status.json').exists() else {}
+                    usage_ready = (usage_status.get('state') == 'running' and usage_status.get('mode') == 'close-history'
+                                   and usage_status.get('pid') == status.get('components', {}).get('usage', {}).get('pid')
+                                   and usage_status.get('history_instance') is not None
+                                   and usage_status.get('committed_history_instance') == usage_status.get('history_instance')
+                                   and time.time() * 1000 - usage_status.get('updated_ms', 0) < 10000)
+                if recent and proxy_ready and vpn_ready and usage_ready:
                     break
                 time.sleep(1)
             else:
@@ -257,7 +292,8 @@ def main():
             PHASE = 'rollback'
             if ssh_applied:
                 restore_access(ssh_target, ssh_before)
-            subprocess.run(['systemctl', 'stop', 'home-gateway'], capture_output=True, timeout=45)
+            run(['systemctl', 'stop', 'home-gateway'], timeout=45)
+            restore_usage(data, backup, usage_existed)
             if not (backup / 'install-guest.sh').exists():
                 raise RuntimeError('Initial deployment failed; inspect the private deployment log before retrying') from None
             for path in files:
@@ -298,6 +334,7 @@ def main():
                 shutil.copy2(old, saved)
                 old.unlink()
         receipt = {'state': 'success', 'version': versions['version'], 'image': bundle['image'],
+                   'mihomo': versions['mihomo'],
                    'image_id': candidate_id, 'runtime_image': runtime_image,
                    'backup': str(backup), 'updated_at': datetime.datetime.now().astimezone().isoformat()}
         if ssh_target:

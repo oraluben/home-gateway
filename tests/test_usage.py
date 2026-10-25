@@ -25,6 +25,17 @@ def connection(name='one', up=0, down=0, born=-60, host='example.com', protocol=
             'sourceIP': '192.168.1.2', 'destinationIP': '203.0.113.1', 'destinationPort': '443', 'host': host}}
 
 
+def closed(item, sequence=1, revision=1, counted=True):
+    return {**item, 'sequence': sequence, 'revision': revision, 'counted': counted,
+            'closedAt': datetime.fromtimestamp(BASE / 1000 + 1, timezone.utc).isoformat()}
+
+
+def history(records=(), sequence=None, instance='history-a', lost=False):
+    sequence = max((r['sequence'] for r in records), default=0) if sequence is None else sequence
+    return {'enabled': True, 'instance': instance, 'nextSequence': sequence,
+            'latestSequence': sequence, 'records': list(records), 'lost': lost}
+
+
 class LedgerTests(unittest.TestCase):
     def setUp(self):
         self.directory = self.enterContext(tempfile.TemporaryDirectory())
@@ -32,8 +43,11 @@ class LedgerTests(unittest.TestCase):
         self.ledger = usage.Ledger(self.path)
         self.addCleanup(lambda: self.ledger.close())
 
-    def sample(self, second, items=(), up=0, down=0, core='core-a', wall=None):
-        return self.ledger.ingest({'connections': list(items), 'uploadTotal': up, 'downloadTotal': down},
+    def sample(self, second, items=(), up=0, down=0, core='core-a', wall=None, history=None):
+        snapshot = {'connections': list(items), 'uploadTotal': up, 'downloadTotal': down}
+        if history is not None:
+            snapshot['history'] = history
+        return self.ledger.ingest(snapshot,
                                  core, BASE + int(second * 1000) if wall is None else wall,
                                  MONO + int(second * 1000000000))
 
@@ -176,7 +190,7 @@ class LedgerTests(unittest.TestCase):
         self.sample(0, [connection(up=100)], 100)
         self.sample(3660, [], 200)
         self.ledger.flush()
-        self.ledger.prune(BASE + 3660000)
+        self.ledger.prune(BASE + 3660000, retention_hours=1)
         flags = self.sample(3661, [connection(up=10000)], 200)
         self.sample(3662, [connection(up=10010)], 210)
         self.assertIn('late_connection_baseline', flags)
@@ -266,8 +280,169 @@ class LedgerTests(unittest.TestCase):
             usage.report(missing)
         self.assertFalse(missing.exists())
 
+    def test_entirely_missed_short_connection_is_reconciled_from_history(self):
+        self.sample(0, history=history())
+        event = closed(connection(up=1000, down=2000, born=0.1))
+        self.sample(1, up=1000, down=2000, history=history([event]))
+        self.assertEqual(self.total(), (1000, 2000))
+        value = usage.report(self.path, now_ms=BASE + 1000)
+        self.assertEqual(value['difference'], {'upload': 0, 'download': 0})
+        self.assertEqual(value['observed']['closed_download'], 2000)
+
+    def test_active_plus_closed_same_uuid_and_replays_count_once(self):
+        self.sample(0, [connection(up=100)], 100, history=history())
+        self.sample(1, [connection(up=200)], 200, history=history())
+        event = closed(connection(up=500))
+        self.sample(2, [connection(up=500)], 500, history=history([event]))
+        self.sample(3, up=500, history=history([event]))
+        self.assertEqual(self.total(), (400, 0))
+
+    def test_late_revision_adds_only_the_remaining_delta(self):
+        self.sample(0, history=history())
+        self.sample(1, up=100, history=history([closed(connection(up=100, born=0.1))]))
+        self.sample(2, up=150, history=history([closed(connection(up=150, born=0.1), 2, 2)]))
+        self.sample(3, up=150, history=history([closed(connection(up=150, born=0.1), 2, 2)]))
+        self.assertEqual(self.total(), (150, 0))
+
+    def test_first_and_late_revision_in_one_page_merge_before_accounting(self):
+        self.sample(0, history=history())
+        events = [closed(connection(up=150, born=0.1), 2, 2), closed(connection(up=100, born=0.1))]
+        self.sample(1, up=150, history=history(events))
+        self.assertEqual(self.total(), (150, 0))
+
+    def test_internal_history_records_do_not_leak_into_totals(self):
+        self.sample(0, history=history())
+        self.sample(1, history=history([closed(connection(up=1000, born=0.1), counted=False)]))
+        self.assertEqual(self.total(), (0, 0))
+
+    def test_counted_inner_connections_are_not_filtered_by_a_display_label(self):
+        self.sample(0, history=history())
+        event = closed(connection(up=100, born=0.1, inbound='Inner'), counted=True)
+        self.sample(1, up=100, history=history([event]))
+        self.assertEqual(self.total(), (100, 0))
+
+    def test_history_cursor_and_usage_resume_atomically_after_uncommitted_exit(self):
+        self.sample(0, history=history())
+        self.ledger.flush()
+        event = closed(connection(up=100, born=0.1))
+        self.sample(1, up=100, history=history([event]))
+        self.reopen()
+        self.assertEqual(self.ledger.history_cursor, 0)
+        self.sample(2, up=100, history=history([event]))
+        self.assertEqual(self.total(), (100, 0))
+        self.reopen()
+        self.assertEqual(self.ledger.history_cursor, 1)
+        self.sample(3, up=150, history=history([closed(connection(up=150, born=0.1), 2, 2)]))
+        self.assertEqual(self.total(), (150, 0))
+
+    def test_history_cursor_is_not_committed_when_checkpoint_write_fails(self):
+        self.sample(0, history=history())
+        self.ledger.flush()
+        self.ledger.db.execute("CREATE TRIGGER fail BEFORE INSERT ON checkpoints BEGIN SELECT RAISE(ABORT,'test'); END")
+        self.sample(1, up=100, history=history([closed(connection(up=100, born=0.1))]))
+        with self.assertRaises(sqlite3.IntegrityError):
+            self.ledger.flush()
+        self.assertEqual(self.ledger.db.execute('SELECT history_sequence FROM samples ORDER BY id DESC LIMIT 1').fetchone()[0], 0)
+
+    def test_bootstrap_skips_historical_close_records(self):
+        self.sample(0, up=1000, history=history([closed(connection(up=1000, born=-60))]))
+        self.sample(1, up=1020, history=history([closed(connection(up=1020, born=-60), 2, 2)]))
+        self.assertEqual(self.total(), (20, 0))
+
+    def test_history_loss_and_instance_changes_are_explicit_without_resetting_connections(self):
+        self.sample(0, [connection(up=100)], 100, history=history())
+        flags = self.sample(1, up=200, history=history([closed(connection(up=200))], lost=True))
+        self.assertIn('history_lost', flags)
+        flags = self.sample(2, up=250, history=history([closed(connection(up=250), 1, 2)], instance='history-b'))
+        self.assertIn('history_changed', flags)
+        self.assertEqual(self.total(), (150, 0))
+
+    def test_disk_checkpoint_is_used_after_memory_cache_eviction(self):
+        self.sample(0, history=history())
+        self.sample(1, up=100, history=history([closed(connection(up=100, born=0.1))]))
+        self.ledger.flush()
+        self.ledger.connections.clear()
+        self.sample(2, up=150, history=history([closed(connection(up=150, born=0.1), 2, 2)]))
+        self.assertEqual(self.total(), (150, 0))
+
+    def test_unknown_late_revision_without_checkpoint_establishes_a_baseline(self):
+        self.sample(0, history=history())
+        flags = self.sample(1, up=100, history=history([closed(connection(up=100, born=0.1), 2, 2)]))
+        self.assertIn('late_connection_baseline', flags)
+        self.assertEqual(self.total(), (0, 0))
+
+    def test_regressing_history_cursor_does_not_advance_working_state(self):
+        self.sample(0, history=history())
+        self.sample(1, history=history(sequence=10))
+        with self.assertRaises(ValueError):
+            self.sample(2, history=history(sequence=5))
+        self.assertEqual(self.ledger.history_cursor, 10)
+
+    def test_delayed_first_summary_can_recover_a_lifetime_older_than_previous_poll(self):
+        self.sample(0, history=history())
+        self.sample(1, history=history())
+        self.sample(2, up=100, history=history([closed(connection(up=100, born=0.1))]))
+        self.assertEqual(self.total(), (100, 0))
+
+    def test_schema_one_migration_preserves_existing_cumulative_baselines(self):
+        path = pathlib.Path(self.directory) / 'legacy.sqlite3'
+        db = sqlite3.connect(path)
+        db.executescript('''
+            CREATE TABLE attribution(id INTEGER PRIMARY KEY,key TEXT UNIQUE,source TEXT,protocol TEXT,host TEXT,
+              destination TEXT,port INTEGER,inbound TEXT,outbound TEXT,kind TEXT,chain TEXT,rule TEXT,payload TEXT);
+            CREATE TABLE samples(id INTEGER PRIMARY KEY,token TEXT UNIQUE,core TEXT,time_ms INTEGER,start_ms INTEGER,
+              mono_ns INTEGER,upload_total INTEGER,download_total INTEGER,upload INTEGER,download INTEGER,flags TEXT);
+            CREATE TABLE usage(sample_id INTEGER,attribution_id INTEGER,start_ms INTEGER,quality TEXT,upload INTEGER,
+              download INTEGER,PRIMARY KEY(sample_id,attribution_id,start_ms,quality));
+            CREATE TABLE checkpoints(key TEXT PRIMARY KEY,upload INTEGER,download INTEGER,seen_ms INTEGER,mono_ns INTEGER);
+            PRAGMA user_version=1;
+        ''')
+        item = connection(up=100)
+        key = json.dumps(('core-a', item['id'], item['start']), separators=(',', ':'))
+        db.execute('INSERT INTO samples VALUES(?,?,?,?,?,?,?,?,?,?,?)',
+                   (1, 'old:1', 'core-a', BASE, BASE, MONO, 100, 0, None, None, '["baseline"]'))
+        db.execute('INSERT INTO checkpoints VALUES(?,?,?,?,?)', (key, 100, 0, BASE, MONO))
+        db.commit()
+        db.close()
+        ledger = usage.Ledger(path)
+        try:
+            ledger.ingest({'connections': [connection(up=120)], 'uploadTotal': 120, 'downloadTotal': 0},
+                          'core-a', BASE + 1000, MONO + 1000000000)
+            ledger.flush()
+            self.assertEqual(ledger.db.execute('PRAGMA user_version').fetchone()[0], 2)
+            self.assertEqual(ledger.db.execute('SELECT sum(upload) FROM usage').fetchone()[0], 20)
+        finally:
+            ledger.close()
+
 
 class CollectorTests(unittest.TestCase):
+    def test_required_history_rejects_a_stock_core_instead_of_silently_sampling(self):
+        response = unittest.mock.Mock(status=200)
+        response.read1.side_effect = [b'{"uploadTotal":0,"downloadTotal":0,"connections":null}', b'']
+        with patch.object(usage_collect.http.client, 'HTTPConnection') as factory:
+            factory.return_value.getresponse.return_value = response
+            controller = usage_collect.Controller({'mihomo': {'external-controller': '127.0.0.1:9090'},
+                                                   'usage': {'require_history': True}})
+            with self.assertRaises(usage_collect.ControllerError) as error:
+                controller.snapshot()
+            self.assertEqual(error.exception.code, 'history_unavailable')
+            self.assertIsNone(controller.connection)
+
+    def test_shutdown_drain_uses_authenticated_controller_and_requires_success(self):
+        with patch.object(usage_collect.http.client, 'HTTPConnection') as factory:
+            response = factory.return_value.getresponse.return_value
+            response.status = 204
+            controller = usage_collect.Controller({'mihomo': {'external-controller': '127.0.0.1:9090',
+                                                             'secret': 'PRIVATE'}})
+            controller.close_connections()
+            self.assertEqual(factory.return_value.request.call_args.args, ('DELETE', '/connections'))
+            self.assertEqual(factory.return_value.request.call_args.kwargs['headers']['Authorization'], 'Bearer PRIVATE')
+            response.status = 401
+            with self.assertRaises(usage_collect.ControllerError) as error:
+                controller.close_connections()
+            self.assertEqual(error.exception.code, 'HTTP_401')
+            controller.close()
+
     def test_http_connection_is_reused_and_auth_is_not_in_url(self):
         response = unittest.mock.Mock(status=200)
         response.read1.side_effect = [b'{"uploadTotal":0,"downloadTotal":0,"connections":null}', b'',
@@ -278,7 +453,7 @@ class CollectorTests(unittest.TestCase):
             controller.snapshot()
             controller.snapshot()
             self.assertEqual(factory.call_count, 1)
-            self.assertEqual(factory.return_value.request.call_args.args, ('GET', '/connections'))
+            self.assertEqual(factory.return_value.request.call_args.args, ('GET', '/connections?history=true&after=0&limit=4096'))
             self.assertEqual(factory.return_value.request.call_args.kwargs['headers']['Authorization'], 'Bearer PRIVATE')
 
     def test_http_error_closes_connection_without_emitting_body(self):

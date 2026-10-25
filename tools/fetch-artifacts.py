@@ -6,6 +6,7 @@ import json
 import pathlib
 import urllib.request
 from common import ROOT
+from mihomo_build import selected_build
 
 
 def fetch(url, proxy=None):
@@ -28,15 +29,19 @@ def main():
     parser = argparse.ArgumentParser()
     parser.add_argument('--proxy')
     parser.add_argument('--ubuntu', action='store_true')
+    parser.add_argument('--mihomo-build', help='Verify a custom build instead of downloading the stock core')
     args = parser.parse_args()
     versions = json.loads((ROOT / 'versions.json').read_text())
     artifact = ROOT / 'artifacts'
-    ensure(artifact / 'mihomo.gz', versions['mihomo'], args.proxy)
-    binary = gzip.decompress((artifact / 'mihomo.gz').read_bytes())
-    if hashlib.sha256(binary).hexdigest() != versions['mihomo']['binary_sha256']:
-        raise ValueError('Mihomo binary checksum mismatch')
-    (ROOT / 'image/mihomo').write_bytes(binary)
-    (ROOT / 'image/mihomo').chmod(0o755)
+    if args.mihomo_build:
+        selected_build(args.mihomo_build)
+    else:
+        ensure(artifact / 'mihomo.gz', versions['mihomo'], args.proxy)
+        binary = gzip.decompress((artifact / 'mihomo.gz').read_bytes())
+        if hashlib.sha256(binary).hexdigest() != versions['mihomo']['binary_sha256']:
+            raise ValueError('Mihomo binary checksum mismatch')
+        (ROOT / 'image/mihomo').write_bytes(binary)
+        (ROOT / 'image/mihomo').chmod(0o755)
     ensure(artifact / 'dashboard.tgz', versions['dashboard'], args.proxy)
     licenses = ROOT / 'image/licenses'
     licenses.mkdir(exist_ok=True)

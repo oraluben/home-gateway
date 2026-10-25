@@ -12,6 +12,7 @@ import tarfile
 import uuid
 from common import ROOT, deployment, json_object, remote, secret, ssh_command, write_operator
 from ssh_access import deployment_access
+from mihomo_build import selected_build, configure_runtime
 sys.path.insert(0, str(ROOT / 'image'))
 from vpn_auth import validate_totp
 
@@ -47,7 +48,7 @@ def materialize(config):
     return bundle
 
 
-def source_archive():
+def source_archive(build=None):
     """Allowlist code and verified artifacts, never arbitrary operator files."""
     files = [p for p in ROOT.iterdir() if p.is_file() and p.suffix in ('.py', '.sh')]
     files += [ROOT / name for name in ('compose.yaml', 'versions.json')]
@@ -58,7 +59,21 @@ def source_archive():
     stream = io.BytesIO()
     with tarfile.open(fileobj=stream, mode='w:gz') as archive:
         for path in files:
+            if build and path == ROOT / 'versions.json':
+                versions = json.loads(path.read_text())
+                versions['mihomo'] = build['metadata']
+                body = (json.dumps(versions, indent=2) + '\n').encode()
+                entry = tarfile.TarInfo('versions.json')
+                entry.size = len(body)
+                archive.addfile(entry, io.BytesIO(body))
+                continue
+            if build and (path == ROOT / 'image/mihomo' or path == ROOT / 'image/licenses/mihomo-LICENSE'):
+                continue
             archive.add(path, arcname=path.relative_to(ROOT).as_posix(), recursive=False)
+        if build:
+            for key, name in (('binary', 'image/mihomo'), ('license', 'image/licenses/mihomo-LICENSE'),
+                              ('source', 'image/licenses/mihomo-SOURCE.tar.gz')):
+                archive.add(build[key], arcname=name, recursive=False)
     return stream.getvalue()
 
 
@@ -68,14 +83,17 @@ def main():
     parser.add_argument('--validate-only', action='store_true')
     parser.add_argument('--restore', help='Encrypted runtime snapshot; current pass configuration remains authoritative')
     parser.add_argument('--rebuild', action='store_true', help='Rebuild even when the deployed image matches the recipe')
+    parser.add_argument('--mihomo-build', help='Verified local build.json; default uses the pinned upstream release')
     args = parser.parse_args()
     config = deployment(args.config)
+    build = selected_build(args.mihomo_build or config['mihomo_build']) if args.mihomo_build or config.get('mihomo_build') else None
     # Host changes are explicit and separate from image/configuration deployment.
     report = importlib.import_module('prepare-host').prepare(config)
     if not report['ready']:
         print(json.dumps(report, indent=2))
         raise RuntimeError('Target is not ready; run tools/prepare-host.py --apply after resolving blockers')
     bundle = materialize(config)
+    configure_runtime(bundle['runtime'], build)
     bundle['rebuild'] = args.rebuild
     if args.restore:
         from backup import decrypt
@@ -84,7 +102,7 @@ def main():
     bundle['image'] = versions['image']
     bundle['version'] = versions['version']
     name = 'home-gateway-deploy-' + uuid.uuid4().hex
-    archive = source_archive()
+    archive = source_archive(build)
     remote(config, 'umask 077; cat > /tmp/' + name + '.tar.gz', archive)
     remote(config, 'umask 077; tar -xOf /tmp/' + name + '.tar.gz tools/guest-install.py > /tmp/' + name + '.py')
     command = 'sudo python3 /tmp/' + name + '.py --source /tmp/' + name + '.tar.gz'

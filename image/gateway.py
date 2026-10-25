@@ -113,10 +113,22 @@ try:
             last_rotate = time.monotonic()
         time.sleep(1)
 finally:
+    proxy_off()
+    if any(component.name == 'usage' and component.process for component in components):
+        # Stop new transparent sessions, close tracked flows while the core is
+        # alive, then let the collector take its final snapshot and commit.
+        from usage_collect import Controller
+        controller = Controller(config)
+        try:
+            controller.close_connections()
+            time.sleep(0.05)
+        except Exception:
+            print('Connection summary drain unavailable during shutdown', flush=True)
+        finally:
+            controller.close()
     for component in components:
         if component.name == 'usage':
             component.stop()
-    proxy_off()
     for component in components:
         if component.name != 'usage':
             component.stop()
